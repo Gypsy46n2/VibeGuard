@@ -27,6 +27,12 @@ from vibeguard.reporting.common import (
     section_rollup,
     suppressed_findings,
 )
+from vibeguard.reporting.diagram import (
+    graph_is_trivial,
+    svg_architecture,
+    svg_checklist,
+    svg_scores,
+)
 
 __all__ = ["HTML_FILENAME", "render_html", "write_html"]
 
@@ -98,6 +104,11 @@ details > div.body { padding: 0 .75rem .75rem; }
           margin: 1rem 0 .25rem; }
 .hidden { display: none !important; }
 ul.plain { margin: .3rem 0 1rem; padding-left: 1.1rem; }
+figure.diagram { margin: 0 0 1.25rem; border: 1px solid var(--line); border-radius: 8px;
+                 background: #ffffff; padding: .25rem; overflow-x: auto; }
+figure.diagram > svg { display: block; min-width: 640px; }
+figure.diagram > figcaption { color: var(--muted); font-size: .82rem;
+                              padding: .15rem .5rem .4rem; }
 """
 
 _JS = """
@@ -161,6 +172,41 @@ def _table(headers: Sequence[str], rows: Sequence[Sequence[str]], *, searchable:
 
 
 # ------------------------------------------------------------------- sections
+
+
+def _figure(svg: str, caption: str) -> str:
+    return f"<figure class='diagram'>{svg}<figcaption>{escape(caption)}</figcaption></figure>"
+
+
+def _glance(report: ScanReport) -> str:
+    """Architecture, scores and checklist as three inline SVGs — no assets, no script."""
+    parts = ["<h2>Architecture &amp; health at a glance</h2>"]
+    if graph_is_trivial(report.graph):
+        parts.append(
+            "<p class='note'>Discovery inferred a single-node architecture: no datastore, "
+            "broker or external service was detected alongside the application, so there "
+            "is no graph worth drawing. That is a statement about what was found, not a "
+            "guarantee that nothing else is deployed.</p>"
+        )
+    else:
+        parts.append(
+            _figure(
+                svg_architecture(report),
+                f"Inferred architecture — {len(report.graph.nodes)} node(s), "
+                f"{len(report.graph.edges)} edge(s). Each node is coloured by the "
+                "category score that governs it.",
+            )
+        )
+    parts.append(
+        _figure(svg_scores(report), "Category scores. Bars are the score before repairs.")
+    )
+    parts.append(
+        _figure(
+            svg_checklist(report),
+            "Checklist coverage per section, as a proportion of each section's topics.",
+        )
+    )
+    return "".join(parts)
 
 
 def _summary(report: ScanReport) -> str:
@@ -440,6 +486,7 @@ def render_html(report: ScanReport) -> str:
         f"<p class='sub'>{escape(report.mode)} scan of {escape(report.repo)} on "
         f"{escape(report.scan_date.isoformat(timespec='seconds'))} · vibeguard "
         f"{escape(report.vibeguard_version)}</p>",
+        _glance(report),
         _summary(report),
         _dashboard(report),
         _regression(report),

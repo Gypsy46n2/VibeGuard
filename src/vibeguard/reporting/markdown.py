@@ -30,6 +30,7 @@ from vibeguard.reporting.common import (
     section_rollup,
     suppressed_findings,
 )
+from vibeguard.reporting.diagram import graph_is_trivial, mermaid_architecture
 
 __all__ = ["MARKDOWN_FILENAME", "render_markdown", "write_markdown"]
 
@@ -66,6 +67,32 @@ def _code(text: str) -> list[str]:
 
 
 # ------------------------------------------------------------------- sections
+
+
+def _architecture_section(report: ScanReport) -> list[str]:
+    """The inferred architecture as a mermaid block — GitHub and GitLab render it."""
+    graph = report.graph
+    lines = ["## Architecture", ""]
+    if graph_is_trivial(graph):
+        lines.append(
+            "Discovery inferred a single-node architecture: no datastore, broker or "
+            "external service was detected alongside the application, so there is no "
+            "graph worth drawing. That is a statement about what was *found*, not a "
+            "guarantee that nothing else is deployed."
+        )
+        lines.append("")
+        return lines
+    lines.append(
+        f"{len(graph.nodes)} node(s) and {len(graph.edges)} edge(s) were inferred from "
+        "the manifests, configuration and code. Node colour is the category score that "
+        "governs that node — green ≥85, amber 60–84, red <60, grey unscored."
+    )
+    lines.append("")
+    lines.append("```mermaid")
+    lines.append(mermaid_architecture(report))
+    lines.append("```")
+    lines.append("")
+    return lines
 
 
 def _summary_section(report: ScanReport) -> list[str]:
@@ -346,6 +373,7 @@ def render_markdown(report: ScanReport) -> str:
         f"{report.vibeguard_version}._",
         "",
     ]
+    lines += _architecture_section(report)
     lines += _summary_section(report)
     lines += _dashboard(report)
     lines += _regression_section(report)
