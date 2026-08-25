@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from vibeguard.core.config import VibeguardConfig
+from vibeguard.core.models import (
+    ArchitectureGraph,
+    AutofixSafety,
+    Category,
+    Confidence,
+    Evidence,
+    Finding,
+    FixRecord,
+    ScaleClass,
+    ScaleProfile,
+    ScanReport,
+    Severity,
+    TechProfile,
+)
 from vibeguard.discovery.context import ScanContext
 from vibeguard.discovery.files import collect_files
 from vibeguard.discovery.graph import build_graph
@@ -63,6 +78,69 @@ def run_rule(rule_cls: type, root: Path, files: Mapping[str, str]) -> list:
     if not rule.applicable(ctx):
         return []
     return rule.detect(ctx)
+
+
+# ------------------------------------------------------- report/finding factories
+
+
+def make_finding(
+    fingerprint: str = "a" * 64,
+    *,
+    rule_id: str = "VG-SEC-001",
+    category: Category = Category.SECURITY,
+    severity: Severity = Severity.HIGH,
+    confidence: Confidence = Confidence.HIGH,
+    title: str = "something is wrong",
+    file: str | None = "app.py",
+    line: int | None = 3,
+    snippet: str = "x = 1",
+    autofix_safety: AutofixSafety = AutofixSafety.SAFE_AUTOFIX,
+    fix: FixRecord | None = None,
+    references: list[str] | None = None,
+) -> Finding:
+    """A fully-populated Finding, for tests that care about reports rather than rules."""
+    return Finding(
+        id=f"{rule_id}:{fingerprint[:12]}",
+        rule_id=rule_id,
+        category=category,
+        severity=severity,
+        confidence=confidence,
+        title=title,
+        description="d",
+        why_it_matters="w",
+        evidence=[Evidence(file=file or ".", line=line, snippet=snippet)],
+        file=file,
+        line=line,
+        autofix_safety=autofix_safety,
+        fingerprint=fingerprint,
+        references=references or [],
+        recommended_followup="do the thing",
+        fix=fix,
+    )
+
+
+def make_report(*findings: Finding, mode: str = "audit", **overrides) -> ScanReport:
+    """A minimally valid ScanReport carrying ``findings``."""
+    data = {
+        "repo": "/repo",
+        "scan_date": datetime.now(UTC),
+        "vibeguard_version": "0.1.0",
+        "mode": mode,
+        "tech": TechProfile(),
+        "graph": ArchitectureGraph(),
+        "scale": ScaleProfile(
+            scale=ScaleClass.SMALL,
+            loc=100,
+            service_count=1,
+            has_sensitive_data=False,
+            rationale="r",
+        ),
+        "findings": list(findings),
+        "scores_before": [],
+        "overall_before": 100,
+    }
+    data.update(overrides)
+    return ScanReport(**data)
 
 
 @pytest.fixture
