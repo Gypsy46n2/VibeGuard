@@ -120,10 +120,118 @@ repository (D8) and leaves a clean seam for M3: once the repair loop attaches
 `FixRecord`s to findings, the same derivation reports FIXED topics with their validation
 evidence, with no further engine changes.
 
-### D16. Rules never implement `fix()` in M2
+### D16. Rules never implement `fix()` in M2 (superseded by D17)
 
 INTERFACES.md §3 makes `fix()` optional and ARCHITECTURE.md §12 assigns repairs to M3.
 Rules that were designed with a deterministic template patch in mind carry a
 `# M3 fix(): …` comment naming the exact edit, and a contract test asserts that no
 built-in rule overrides `Rule.fix` yet — so "SAFE_AUTOFIX" in M2 means "a safe fix is
 known to exist", never "a fix was applied".
+
+## M3 — repair, git safety, validation
+
+### D17. Fourteen rules implement `fix()`; the rest stay detect-only
+
+D16's contract test ("no rule overrides `fix()`") is replaced by an explicit allow-list:
+`test_only_the_declared_rules_implement_a_repair` asserts that exactly the fourteen rules
+M2 flagged with a `# M3 fix():` comment (plus VG-SEC-014's helmet case) override
+`Rule.fix`, and that each of them is classified `SAFE_AUTOFIX` or `REVIEW_RECOMMENDED`.
+Adding a repair therefore stays a deliberate, reviewed act rather than something a rule
+can acquire by accident. The remaining M2 markers name repairs whose "right" edit is a
+product decision (retry backoff, DR volumes, CI steps, Redis adoption); they stay
+comments.
+
+### D18. `GitSafety.commit` returns `str | None`
+
+INTERFACES.md §5 types it as `-> str`. In the `--allow-no-git` fallback mode
+(ARCHITECTURE.md §7) there is no commit to return, and inventing a fake sha would put a
+lie in `FixRecord.commit_sha`. The return type is widened to `str | None`; `None` means
+"applied, backed up as `<file>.orig`, not committed", and the CLI prints `—` for it.
+
+### D19. A dirty worktree means *tracked* modifications
+
+`preflight()` runs `git status --porcelain --untracked-files=no`. Untracked files cannot
+be clobbered by `git checkout -- <path>` and are never staged (commits are
+pathspec-limited to the patch's own files), while requiring a repository with zero
+untracked files would refuse almost every real project — including one that just ran
+`vibeguard audit` and has a `vibeguard-report.json` sitting there.
+
+### D20. `PARTIALLY_FIXED` is reserved, not emitted
+
+INTERFACES.md §5 lists it among the statuses. With one finding per patch and whole-file
+edits, a rollback is all-or-nothing, so the honest mapping is: rolled back → `FAILED`,
+applied but no validator could confirm it → `UNVERIFIED`, applied and validated →
+`FIXED`. Emitting `PARTIALLY_FIXED` would require inventing a partial outcome that the
+repair loop never actually produces. The status stays in the enum for multi-file repairs
+in later milestones.
+
+### D21. Baseline failures are excluded from post-fix verdicts, visibly
+
+Before the first patch the ladder runs once over the untouched repository. Any validator
+that fails there is recorded in `ValidationEngine.baseline_failures`; when the same
+validator fails after a fix, the step is rewritten as `skipped=True` with the detail
+`excluded — this validator already failed at baseline (…)`, and the exclusion is repeated
+in `FixRecord.residual_risk`. A project whose test suite was already red therefore cannot
+mark our fix `FAILED` — and cannot silently borrow a green verdict either. Every other
+non-skipped failure (including `lint`) stops the ladder and fails the fix: our patches
+must not introduce new violations, and pre-existing ones are already excluded.
+
+### D22. `[fix]` config gains `deep_validate` and two timeouts
+
+INTERFACES.md §9 shows `[fix] allow_no_git` as the section's only documented key, but §7
+requires a container-build rung gated on a flag and per-rung timeouts. `FixConfig` gains
+`deep_validate` (default `false`, set by `fix --deep-validate`),
+`validation_timeout_full` (600s) and `validation_timeout_targeted` (120s). Defaults
+preserve the documented behaviour exactly.
+
+### D23. `startup` is skipped, and says why
+
+Booting an unknown application needs its ports, environment, and dependencies. Rather
+than fake a smoke test, the `startup` validator always returns `skipped=True` with the
+reason, so the gap is visible in every report instead of being quietly absent from the
+ladder.
+
+### D24. Destructive domains are refused in every mode
+
+ARCHITECTURE.md §7 forbids destructive DB/schema/infra/auth changes outside interactive
+approval; VibeGuard goes further and refuses them in *all* modes, because none of the M3
+rules has a provably safe repair in those domains. The test is
+`FixerEngine.destructive_reason`: category `DATABASE`, or any declared topic starting
+`database.` / `iac.` / `kubernetes.`, or containing `migration`, `schema`, `auth`,
+`backup`, or `encryption-at-rest`. Such findings get `REQUIRES_REVIEW` with instructions.
+
+### D25. `vibeguard fix` defaults to `--safe` with a printed notice
+
+The brief allows either refusing without a mode flag or defaulting to safe. Defaulting is
+chosen — the safe mode applies only `SAFE_AUTOFIX` repairs, so the default is the
+conservative one — and the CLI prints `no mode given — running --safe …` so nobody is
+surprised about which mode ran. `--safe --interactive` together is an error (exit 2).
+
+### D26. Line numbers are re-located, never trusted blindly
+
+A finding records the line it was detected at, but an earlier fix to the same file may
+have shifted it. `locate_line`/`locate_call` accept the recorded line when it still
+matches the defect, otherwise take a *unique* match within twelve lines, and return
+`None` when the target is ambiguous. Editing the wrong line is far worse than leaving a
+finding unrepaired.
+
+### D27. A dependency entry is not evidence of use (VG-SEC-014)
+
+`package.json` is excluded from VG-SEC-014's "headers are configured somewhere" search:
+listing `helmet` proves it is installed, not that it is ever applied. This makes
+"installed but never called" detectable — and it is exactly the case the rule can repair
+by wiring `app.use(helmet())` into the single Express entrypoint.
+
+### D28. Advisory findings get no `FixRecord`
+
+`INFORMATIONAL` / `NOT_APPLICABLE` findings (D12's "absence of evidence" reports) are
+skipped by the repair loop entirely rather than stamped `REQUIRES_REVIEW`, so the
+checklist's advisory handling from M2 keeps working unchanged and the repair table shows
+only findings the fixer genuinely considered.
+
+### D29. The `build` rung never installs anything
+
+`npm run build` runs when the script exists and npm is present. A Python package is only
+built when the `build` module is already importable in the environment; otherwise the rung
+is skipped with that reason. Validation must never mutate the developer's environment to
+prove a point.
