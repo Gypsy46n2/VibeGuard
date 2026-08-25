@@ -1,0 +1,13 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show config
+        run: echo "deploy token ${{ secrets.DEPLOY_TOKEN }}"
+      - name: Deploy
+        run: kubectl apply -f k8s/
