@@ -235,3 +235,124 @@ only findings the fixer genuinely considered.
 built when the `build` module is already importable in the environment; otherwise the rung
 is skipped with that reason. Validation must never mutate the developer's environment to
 prove a point.
+
+## M4 — reporting, baseline, suppressions, history
+
+M4 began from an uncommitted, half-finished attempt that crashed mid-run. Every file
+it left behind was reviewed rather than trusted. `baseline/{__init__,store,suppressions,
+history}.py` and `reporting/{common,markdown,html,writer}.py` were **kept** with
+targeted corrections (noted below); the modifications to `core/config.py`,
+`core/models.py`, `engine/checklist.py` and `reporting/__init__.py` were **kept** and
+extended. Nothing was rewritten wholesale. The engine wiring, the whole CLI surface,
+and all of the tests are new.
+
+### D30. VibeGuard's own output is excluded from the scan
+
+The draft excluded `**/.vibeguard/**`. That was not enough: `vibeguard-report.md`
+names every defect it found, in prose, so on the *next* run a rule asking "is a backup
+configured anywhere in this repository?" answers yes on the strength of our own
+sentence about backups being absent. Six findings disappeared on the second scan of an
+unchanged repository before this was fixed. `vibeguard-report.{json,md,html}` join
+`.vibeguard/` in `DEFAULT_EXCLUDES`: **the previous run's findings must never become
+this run's evidence.**
+
+### D31. A topic whose only findings are suppressed is PASS, with the waiver on the row
+
+INTERFACES.md §8 excludes suppressed findings from scoring but does not say what the
+checklist should do with them. The same reasoning applies: a human looked at the
+finding and accepted it, so it is not an *open* defect and `FAIL` would be wrong.
+`REVIEW_REQUIRED` would be worse — it asks for a review that already happened. The
+topic therefore reads `PASS`, and never silently: `ChecklistItem.note` gains
+`"N suppressed finding(s) excluded (accepted_risk, …)"`, so the verdict and the reason
+it was reachable sit on the same row. The PASS note also now says "no *open* findings"
+rather than "no findings", which was a small lie in exactly this case.
+
+### D32. The engine reads `.vibeguard/`; only the caller writes it
+
+D8 says `Engine.audit` never writes to the scanned repository. M4 needs history
+persistence, which is a write. Rather than weaken D8, the split is by *responsibility*:
+the engine **reads** the baseline, the suppressions, and the stored history, and
+attaches the resulting `RegressionDiff` to the report; the CLI **writes** the new
+history entry (`_persist_history`) alongside the report files. `Engine(config).audit()`
+therefore stays a pure function of the repository — `test_the_engine_does_not_write_to_
+the_repository` asserts it — and library embedders opt into persistence by calling
+`vibeguard.baseline.write_history` themselves. `[history] enabled/keep` configures the
+CLI's behaviour (`keep = 0` disables pruning).
+
+### D33. `--output` is one comma-separated list of everything a run produces
+
+The M1 `--output` was a single enum mixing terminal formats with file formats. M4 needs
+three files and two terminal modes at once, so it becomes a list: `table` (rich
+summary), `json` (echo to stdout), `jsonl` (event stream, §6), `md`/`html` (write the
+file), `all` (= `table,json,md,html`). The default is `table,md`.
+`vibeguard-report.json` is written **unconditionally** — §8 calls it canonical, so it
+is not something a flag should be able to switch off — which is what makes the default
+the documented "json + md" pair. An unknown format is exit 2, not a silent no-op.
+
+### D34. `regressed` is measured against two horizons, not the whole history
+
+INTERFACES.md §7 says the diff "compares latest two by fingerprint sets", which yields
+new/resolved/unchanged but cannot express *regressed*. The exact semantics implemented:
+a fingerprint is **unchanged** if it was open in the previous run and is open now;
+**resolved** if it was open in the previous run and is not open now; **regressed** if
+it is open now, was *not* open in the previous run, but was open in some run before
+that; **new** otherwise. So `regressed` means "fixed, then came back" — a different
+failure of process from a defect that was never addressed — and one run of clean
+history is enough to distinguish them. `resolved` is reported as fingerprints (the
+findings no longer exist, so they have no ids); the other three are finding ids.
+
+### D35. A baseline is a scheduling decision and is priced as one
+
+`Finding.baselined` marks the finding, and that is *all* it does to the report: the
+finding is still detected, still listed, still scored (INTERFACES.md §8 excludes only
+*suppressed* findings from scoring). It is excluded from the CI gate, and only while
+`[ci] use_baseline` is on — `--no-baseline` brings every baselined finding straight
+back into the gate and the report carries a warning saying so. `save_baseline` stores
+only findings that are neither suppressed nor `FIXED`: exempting something that needs
+no exemption would quietly grow the baseline every run.
+
+### D36. An expired suppression is ignored, and its lapse is reported
+
+`expires` in the past means the entry is not honoured at all — the finding is live
+again — and `ScanReport.warnings` carries "…expired on YYYY-MM-DD and was ignored".
+The lapsed entry still appears in `ScanReport.suppressions`, so the audit trail
+survives the expiry rather than vanishing with it. A suppression that matched no
+finding in this scan is also reported, so stale entries are visible instead of
+accumulating.
+
+### D37. An inline suppression must be visible from the code it excuses
+
+`# vibeguard: ignore=VG-XXX-NNN reason="…"` is honoured only on the finding's own line
+or the line directly above it. Scanning the whole file would let a waiver sit hundreds
+of lines from what it waives. A `reason=` value that is one of the four
+`SuppressionReason` values is used as the reason; any other text becomes the entry's
+`note` with reason `accepted_risk`, so a human sentence is preserved rather than
+rejected.
+
+### D38. `ScanReport` gains `baseline_validation` and `warnings`
+
+The M3 notes flagged that `ValidationEngine.baseline_steps` was computed but never
+serialised, which made D21's exclusions invisible to anyone reading the report rather
+than the terminal. `ScanReport.baseline_validation` now carries the pre-fix ladder, and
+both renderers print it with an explicit "these validators already failed on the
+untouched repository, so their post-fix results are excluded" note. `ScanReport.warnings`
+carries the non-fatal problems (expired suppressions, unreadable memory files) that
+previously went only to the log.
+
+### D39. Repair outcomes are counted with the full `FixStatus` vocabulary
+
+The draft's renderer collapsed the seven statuses into four buckets
+(fixed/partial/review/none). `repair_counts` now seeds **every** `FixStatus` at zero
+plus a `no_repair_record` bucket for findings the repair loop never considered (audit
+mode, or D28's advisory findings), and `ScanReport.counts` does the same for its
+`status:*` keys — a reader can tell "no fix failed" from "this report does not track
+failures".
+
+### D40. Reference URLs are printed as text, never as links
+
+The HTML report inlines its CSS and its ~20-line filter script and contains no `href`,
+`src`, `@import`, or `<link>` at all. It is routinely read from a CI artifact store or
+an air-gapped machine, so "self-contained" is enforced by construction and asserted by
+`test_html_is_self_contained` rather than promised. The filter box hides itself under
+`<noscript>`; everything else (collapsing via `<details>`, colour, tables) is pure
+CSS/HTML, so the document is fully usable with scripting off.
