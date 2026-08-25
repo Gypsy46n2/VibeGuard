@@ -1,7 +1,7 @@
 # Hooks this repository provides to other projects:
 #
 #   repos:
-#     - repo: https://github.com/vibeguard/vibeguard
+#     - repo: https://github.com/Gypsy46n2/VibeGuard
 #       rev: v0.2.0
 #       hooks:
 #         - id: vibeguard-ci

@@ -8,8 +8,8 @@
   "schema_version": "1",
   "entry": {
     "command": "vibeguard",
-    "install": "pip install vibeguard",
-    "docker": "ghcr.io/vibeguard/vibeguard:0.2.0",
+    "install": "pip install git+https://github.com/Gypsy46n2/VibeGuard.git",
+    "docker": "build locally: docker build -t vibeguard .",
     "stream_flag": "--output jsonl",
     "commands": [
       {

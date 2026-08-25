@@ -9,14 +9,14 @@ optional extras below only *add* coverage — they never gate it.
 | Method | Command | Use it when |
 |---|---|---|
 | **pipx** *(recommended)* | `pipx install vibeguard` | You want the CLI on your PATH without touching a project's environment. |
-| pip | `pip install vibeguard` | Inside a project virtualenv, or when you also embed the library. |
+| pip | `pip install git+https://github.com/Gypsy46n2/VibeGuard.git` | Inside a project virtualenv, or when you also embed the library. |
 | pip + scanners | `pip install "vibeguard[scanners]"` | You want bandit / detect-secrets / pip-audit / checkov / semgrep merged in. |
 | pip + AI | `pip install "vibeguard[ai]"` | You want the `anthropic` SDK or an OpenAI-compatible endpoint. |
 | pip, everything | `pip install "vibeguard[scanners,ai,dev]"` | Contributing. |
-| Docker | `docker run --rm -v "$PWD":/repo ghcr.io/vibeguard/vibeguard audit /repo` | No Python on the machine, or a hermetic CI step. |
+| Docker | `docker run --rm -v "$PWD":/repo vibeguard (local build: docker build -t vibeguard .) audit /repo` | No Python on the machine, or a hermetic CI step. |
 | From source | `git clone … && pip install -e ".[dev]"` | Developing rules. |
-| GitHub Action | `uses: vibeguard/vibeguard@v0.2.0` | CI. See [PLUGINS.md](PLUGINS.md#ci-surfaces). |
-| pre-commit | `- repo: https://github.com/vibeguard/vibeguard` with `id: vibeguard-ci` | Gate before the commit lands. |
+| GitHub Action | `uses: Gypsy46n2/VibeGuard@main` | CI. See [PLUGINS.md](PLUGINS.md#ci-surfaces). |
+| pre-commit | `- repo: https://github.com/Gypsy46n2/VibeGuard` with `id: vibeguard-ci` | Gate before the commit lands. |
 
 Verify:
 
