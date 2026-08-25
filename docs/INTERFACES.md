@@ -225,7 +225,49 @@ class NullProvider(AIProvider): ...   # raises AIUnavailable; rules with require
 def get_provider(config) -> AIProvider   # enforces local_only: non-local provider + local_only=True -> returns NullProvider + warning event
 ```
 
-## 11. Exit codes (CLI)
+## 11. Master audit checklist (completeness guarantee)
+
+`src/vibeguard/rules/topics.yaml` is the authoritative registry of every audit topic
+from the product brief (≈240 items across 18 sections, incl. chaos engineering,
+serverless limits, incident/on-call/postmortem readiness, GC behavior, CDN config).
+**Every ScanReport must account for every topic** — no category may be silently
+skipped.
+
+```python
+class ChecklistStatus(str, Enum):
+    PASS="pass"; FAIL="fail"; FIXED="fixed"; REVIEW_REQUIRED="review_required"; NOT_APPLICABLE="not_applicable"
+
+class ChecklistItem(BaseModel):
+    topic_id: str                # "<section>.<slug>" e.g. "security.sql-injection"
+    section: str; name: str; category: Category
+    status: ChecklistStatus
+    detectors: list[str]         # rule ids + adapter names that declare this topic
+    technologies: list[str]      # techs the mapped detectors apply to (informational)
+    finding_ids: list[str] = []  # findings attributed to this topic
+    fixes: list[str] = []        # finding ids with FixRecord.status == FIXED
+    validation: str = ""         # summary of validation evidence for fixes
+    note: str = ""               # esp. for REVIEW_REQUIRED with no automated detector
+```
+
+Rule ABC gains `topics: ClassVar[set[str]] = set()` (topic_ids it evaluates);
+ToolAdapter gains the same. Engine derives the checklist after detection/repair:
+
+- **NOT_APPLICABLE** — no mapped detector is applicable to this stack/scale (e.g. no
+  k8s topics for a compose-only app), or topic's preconditions absent. `note` explains.
+- **PASS** — ≥1 mapped detector ran and produced no open findings.
+- **FAIL** — open unfixed findings attributed to the topic.
+- **FIXED** — all attributed findings have FixRecord.status == FIXED (validation
+  summary required).
+- **REVIEW_REQUIRED** — findings needing manual review, or the topic is applicable
+  but has **no automated detector yet** (`note: "no automated detector — manual
+  review required"`). This is the honest fallback; it is never converted to PASS.
+
+`ScanReport` gains `checklist: list[ChecklistItem]`. All three report renderers must
+include the full checklist (md/html: per-section tables with status rollups; json:
+verbatim). The engine hard-fails a scan if any topic in topics.yaml is missing from
+the produced checklist (self-check).
+
+## 12. Exit codes (CLI)
 
 `0` ok / below threshold; `1` findings ≥ fail_on threshold (ci mode); `2` execution
 error; `3` dirty-worktree refusal.

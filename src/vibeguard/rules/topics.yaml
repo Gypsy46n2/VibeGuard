@@ -1,0 +1,358 @@
+# VibeGuard master audit checklist — authoritative topic registry.
+# Every topic here MUST appear in every ScanReport.checklist with an explicit status:
+# PASS | FAIL | FIXED | REVIEW_REQUIRED | NOT_APPLICABLE.  Nothing is silently skipped.
+# topic_id = "<section>.<slug>".  Rules/adapters declare `topics` they evaluate.
+# category: the vibeguard Category each section's findings roll up to.
+
+sections:
+  - id: api
+    name: API & Traffic Management
+    category: api
+    topics:
+      - {id: rate-limiting, name: Rate limiting}
+      - {id: caching, name: Caching}
+      - {id: load-balancing-readiness, name: Load balancing readiness}
+      - {id: reverse-proxies, name: Reverse proxies}
+      - {id: api-gateways, name: API gateways}
+      - {id: timeouts, name: Timeouts}
+      - {id: retries, name: Retries}
+      - {id: exponential-backoff, name: Exponential backoff}
+      - {id: idempotency, name: Idempotency}
+      - {id: request-deduplication, name: Request deduplication}
+      - {id: circuit-breakers, name: Circuit breakers}
+      - {id: backpressure, name: Backpressure}
+      - {id: long-polling, name: Long polling}
+      - {id: server-sent-events, name: Server-Sent Events}
+      - {id: websockets, name: WebSockets}
+      - {id: webhooks, name: Webhooks}
+      - {id: api-versioning, name: API versioning}
+      - {id: semantic-versioning, name: Semantic versioning}
+  - id: containers
+    name: Containers & Orchestration
+    category: containers
+    topics:
+      - {id: docker, name: Docker}
+      - {id: docker-compose, name: Docker Compose}
+      - {id: kubernetes, name: Kubernetes}
+      - {id: health-checks, name: Container health checks}
+      - {id: resource-limits, name: Resource limits}
+      - {id: liveness-probes, name: Liveness probes}
+      - {id: readiness-probes, name: Readiness probes}
+      - {id: startup-probes, name: Startup probes}
+      - {id: autoscaling-config, name: Autoscaling configuration}
+      - {id: horizontal-scaling, name: Horizontal scaling}
+      - {id: vertical-scaling, name: Vertical scaling}
+      - {id: rolling-deployments, name: Rolling deployments}
+      - {id: blue-green-deployments, name: Blue-green deployments}
+      - {id: canary-releases, name: Canary releases}
+      - {id: rollbacks, name: Rollbacks}
+      - {id: helm-charts, name: Helm charts}
+      - {id: build-caching, name: Build caching}
+      - {id: image-size, name: Image size}
+      - {id: image-security, name: Image security}
+      - {id: dependency-pinning, name: Dependency pinning (images)}
+      - {id: container-privileges, name: Container privileges}
+  - id: distributed
+    name: Distributed Systems
+    category: reliability
+    topics:
+      - {id: service-discovery, name: Service discovery}
+      - {id: distributed-locks, name: Distributed locks}
+      - {id: distributed-transactions, name: Distributed transactions}
+      - {id: saga-patterns, name: Saga patterns}
+      - {id: event-driven-architecture, name: Event-driven architecture}
+      - {id: message-queues, name: Message queues}
+      - {id: pub-sub, name: Pub/Sub}
+      - {id: dead-letter-queues, name: Dead-letter queues}
+      - {id: leader-election, name: Leader election}
+      - {id: race-conditions, name: Race conditions (distributed)}
+      - {id: network-partitions, name: Network partitions}
+      - {id: clock-skew, name: Clock skew}
+      - {id: eventual-consistency, name: Eventual consistency}
+      - {id: cap-tradeoffs, name: CAP trade-offs}
+      - {id: split-brain, name: Split-brain scenarios}
+      - {id: duplicate-processing, name: Duplicate processing}
+      - {id: out-of-order-events, name: Out-of-order events}
+      - {id: poison-messages, name: Poison messages}
+  - id: concurrency
+    name: Concurrency & Runtime Safety
+    category: reliability
+    topics:
+      - {id: race-conditions, name: Race conditions}
+      - {id: deadlocks, name: Deadlocks}
+      - {id: memory-leaks, name: Memory leaks}
+      - {id: thread-safety, name: Thread safety}
+      - {id: resource-leaks, name: Resource leaks}
+      - {id: connection-leaks, name: Connection leaks}
+      - {id: file-handle-leaks, name: File-handle leaks}
+      - {id: worker-starvation, name: Worker starvation}
+      - {id: event-loop-blocking, name: Event-loop blocking}
+      - {id: gc-pressure, name: Garbage-collection pressure}
+      - {id: gc-behavior, name: Garbage-collection behavior}
+      - {id: unbounded-queues, name: Unbounded queues}
+      - {id: unbounded-concurrency, name: Unbounded concurrency}
+      - {id: thread-process-exhaustion, name: Thread/process exhaustion}
+  - id: database
+    name: Database Reliability & Performance
+    category: database
+    topics:
+      - {id: indexing, name: Database indexing}
+      - {id: missing-indexes, name: Missing indexes}
+      - {id: unused-indexes, name: Unused indexes}
+      - {id: query-optimization, name: Query optimization}
+      - {id: n-plus-one, name: N+1 queries}
+      - {id: connection-pooling, name: Connection pooling}
+      - {id: read-replicas, name: Read replicas}
+      - {id: sharding-readiness, name: Sharding readiness}
+      - {id: partitioning, name: Partitioning}
+      - {id: replication, name: Replication}
+      - {id: transactions, name: Transactions}
+      - {id: isolation-levels, name: Isolation levels}
+      - {id: locking-behavior, name: Locking behavior}
+      - {id: optimistic-locking, name: Optimistic locking}
+      - {id: pessimistic-locking, name: Pessimistic locking}
+      - {id: migration-safety, name: Migration safety}
+      - {id: migration-ordering, name: Migration ordering}
+      - {id: schema-versioning, name: Schema versioning}
+      - {id: rollback-strategy, name: Rollback strategy}
+      - {id: data-integrity, name: Data integrity}
+      - {id: foreign-keys, name: Foreign keys}
+      - {id: unique-constraints, name: Unique constraints}
+      - {id: nullability, name: Nullability}
+      - {id: referential-integrity, name: Referential integrity}
+  - id: security
+    name: Application Security
+    category: security
+    topics:
+      - {id: sql-injection, name: SQL injection}
+      - {id: xss, name: Cross-site scripting (XSS)}
+      - {id: ssrf, name: SSRF}
+      - {id: csrf, name: CSRF}
+      - {id: auth-bypass, name: Authentication bypass}
+      - {id: authorization-failures, name: Authorization failures}
+      - {id: idor, name: IDOR}
+      - {id: path-traversal, name: Path traversal}
+      - {id: command-injection, name: Command injection}
+      - {id: template-injection, name: Template injection}
+      - {id: insecure-deserialization, name: Insecure deserialization}
+      - {id: file-upload, name: File-upload vulnerabilities}
+      - {id: open-redirects, name: Open redirects}
+      - {id: sensitive-data-exposure, name: Sensitive-data exposure}
+      - {id: hardcoded-credentials, name: Hardcoded credentials}
+      - {id: secret-leakage, name: Secret leakage}
+      - {id: weak-cryptography, name: Weak cryptography}
+      - {id: unsafe-randomness, name: Unsafe randomness}
+      - {id: dependency-vulnerabilities, name: Dependency vulnerabilities}
+      - {id: iam, name: IAM}
+      - {id: oauth, name: OAuth}
+      - {id: jwt-handling, name: JWT handling}
+      - {id: jwt-expiration, name: JWT expiration}
+      - {id: jwt-rotation, name: JWT rotation}
+      - {id: session-management, name: Session management}
+      - {id: cookie-security, name: Cookie security}
+      - {id: tls, name: TLS}
+      - {id: encryption-at-rest, name: Encryption at rest}
+      - {id: encryption-in-transit, name: Encryption in transit}
+      - {id: cors, name: CORS}
+      - {id: csp, name: Content Security Policy}
+      - {id: security-headers, name: Security headers}
+      - {id: waf-readiness, name: WAF readiness}
+      - {id: ddos-readiness, name: DDoS protection readiness}
+      - {id: api-authentication, name: API authentication}
+  - id: secrets
+    name: Secrets Management
+    category: secrets
+    topics:
+      - {id: api-keys-in-repo, name: API keys committed to repository}
+      - {id: passwords-in-repo, name: Passwords in repository}
+      - {id: tokens-in-repo, name: Tokens in repository}
+      - {id: private-keys-in-repo, name: Private keys in repository}
+      - {id: database-credentials, name: Database credentials}
+      - {id: cloud-credentials, name: Cloud credentials}
+      - {id: environment-secrets, name: Environment secrets handling}
+      - {id: secret-store-migration, name: Secret store / vault migration}
+  - id: deployment
+    name: Deployment Safety
+    category: deployment
+    topics:
+      - {id: ci-cd-pipelines, name: CI/CD pipelines}
+      - {id: deployment-scripts, name: Deployment scripts}
+      - {id: environment-separation, name: Environment separation (dev/staging/prod)}
+      - {id: feature-flags, name: Feature flags}
+      - {id: blue-green, name: Blue-green deployments}
+      - {id: canary, name: Canary deployments}
+      - {id: rolling, name: Rolling deployments}
+      - {id: rollback-procedures, name: Rollback procedures}
+      - {id: migration-sequencing, name: Database migration sequencing}
+      - {id: zero-downtime, name: Zero-downtime deployment readiness}
+      - {id: build-reproducibility, name: Build reproducibility}
+      - {id: dangerous-workflows, name: Dangerous deploy workflows (deploy from dev machines)}
+  - id: observability
+    name: Observability
+    category: observability
+    topics:
+      - {id: structured-logging, name: Structured logging}
+      - {id: log-levels, name: Log levels}
+      - {id: metrics, name: Metrics}
+      - {id: monitoring, name: Monitoring}
+      - {id: distributed-tracing, name: Distributed tracing}
+      - {id: correlation-ids, name: Correlation IDs}
+      - {id: request-ids, name: Request IDs}
+      - {id: error-tracking, name: Error tracking}
+      - {id: alerts, name: Alerts}
+      - {id: health-checks, name: Health check endpoints}
+      - {id: liveness-checks, name: Liveness checks}
+      - {id: readiness-checks, name: Readiness checks}
+      - {id: slis, name: SLIs}
+      - {id: slos, name: SLOs}
+      - {id: error-budgets, name: Error budgets}
+  - id: disaster-recovery
+    name: Reliability & Disaster Recovery
+    category: disaster_recovery
+    topics:
+      - {id: backups, name: Backups}
+      - {id: backup-frequency, name: Backup frequency}
+      - {id: backup-validation, name: Backup validation (tested restores)}
+      - {id: restore-procedures, name: Restore procedures}
+      - {id: disaster-recovery-plan, name: Disaster recovery plan}
+      - {id: failover, name: Failover}
+      - {id: multi-region-readiness, name: Multi-region readiness}
+      - {id: database-recovery, name: Database recovery}
+      - {id: rpo, name: Recovery-point objective}
+      - {id: rto, name: Recovery-time objective}
+      - {id: chaos-engineering, name: Chaos engineering}
+      - {id: incident-readiness, name: Production incident readiness}
+      - {id: on-call-readiness, name: On-call readiness}
+      - {id: postmortem-process, name: Postmortem processes}
+  - id: network
+    name: Network & Protocols
+    category: reliability
+    topics:
+      - {id: dns, name: DNS}
+      - {id: tcp, name: TCP}
+      - {id: udp, name: UDP}
+      - {id: http11, name: HTTP/1.1}
+      - {id: http2, name: HTTP/2}
+      - {id: http3, name: HTTP/3}
+      - {id: grpc, name: gRPC}
+      - {id: websockets, name: WebSockets (transport)}
+      - {id: tls-config, name: TLS configuration}
+      - {id: reverse-proxies, name: Reverse proxies}
+      - {id: proxies, name: Proxies}
+      - {id: cdn-configuration, name: CDN configuration}
+      - {id: edge-caching, name: Edge caching}
+      - {id: cache-invalidation, name: Cache invalidation}
+      - {id: network-timeouts, name: Network timeouts}
+      - {id: connection-reuse, name: Connection reuse}
+      - {id: keep-alive, name: Keep-alive settings}
+  - id: performance
+    name: Performance Engineering
+    category: performance
+    topics:
+      - {id: latency, name: Latency}
+      - {id: throughput, name: Throughput}
+      - {id: p50-latency, name: P50 latency}
+      - {id: p95-latency, name: P95 latency}
+      - {id: p99-latency, name: P99 latency}
+      - {id: tail-latency, name: Tail latency}
+      - {id: cold-starts, name: Cold starts}
+      - {id: serverless-limits, name: Serverless limits}
+      - {id: database-bottlenecks, name: Database bottlenecks}
+      - {id: cache-efficiency, name: Cache efficiency}
+      - {id: network-bottlenecks, name: Network bottlenecks}
+      - {id: worker-bottlenecks, name: Worker bottlenecks}
+      - {id: memory-usage, name: Memory usage}
+      - {id: cpu-usage, name: CPU usage}
+      - {id: excessive-serialization, name: Excessive serialization}
+      - {id: large-payloads, name: Large payloads}
+      - {id: duplicate-requests, name: Duplicate requests}
+      - {id: dependency-latency, name: Dependency latency}
+      - {id: slow-queries, name: Slow queries}
+      - {id: build-performance, name: Build performance}
+  - id: scaling
+    name: Scaling Readiness
+    category: scalability
+    topics:
+      - {id: horizontal-scaling, name: Horizontal scaling}
+      - {id: vertical-scaling, name: Vertical scaling}
+      - {id: autoscaling, name: Autoscaling}
+      - {id: statelessness, name: Statelessness}
+      - {id: session-storage, name: Session storage}
+      - {id: sticky-sessions, name: Sticky sessions}
+      - {id: shared-storage, name: Shared storage}
+      - {id: queue-workers, name: Queue workers}
+      - {id: cache-architecture, name: Cache architecture}
+      - {id: db-bottlenecks, name: Database bottlenecks (scaling)}
+      - {id: multi-instance-behavior, name: Multi-instance behavior}
+      - {id: multi-region-deployment, name: Multi-region deployment}
+  - id: cost
+    name: Cost Optimization
+    category: cost
+    topics:
+      - {id: overprovisioned-resources, name: Overprovisioned resources}
+      - {id: excessive-cloud-calls, name: Excessive cloud calls}
+      - {id: excessive-db-queries, name: Excessive database queries}
+      - {id: unnecessary-api-requests, name: Unnecessary API requests}
+      - {id: wasteful-background-jobs, name: Wasteful background jobs}
+      - {id: oversized-containers, name: Oversized containers}
+      - {id: excessive-logging, name: Excessive logging}
+      - {id: inefficient-storage, name: Inefficient storage}
+      - {id: expensive-network-transfers, name: Expensive network transfers}
+      - {id: poor-caching, name: Poor caching}
+      - {id: unnecessary-serverless-invocations, name: Unnecessary serverless invocations}
+  - id: jobs
+    name: Cron Jobs & Background Processing
+    category: reliability
+    topics:
+      - {id: cron-jobs, name: Cron jobs}
+      - {id: scheduled-workers, name: Scheduled workers}
+      - {id: job-queues, name: Job queues}
+      - {id: retry-behavior, name: Retry behavior}
+      - {id: job-deduplication, name: Job deduplication}
+      - {id: job-locking, name: Job locking}
+      - {id: dead-letter-handling, name: Dead-letter handling}
+      - {id: poison-jobs, name: Poison jobs}
+      - {id: worker-crashes, name: Worker crash recovery}
+      - {id: job-observability, name: Job observability}
+      - {id: timeout-behavior, name: Job timeout behavior}
+      - {id: job-idempotency, name: Job idempotency}
+  - id: dependencies
+    name: Dependency Health
+    category: dependencies
+    topics:
+      - {id: dependency-conflicts, name: Dependency conflicts}
+      - {id: outdated-libraries, name: Outdated libraries}
+      - {id: vulnerable-dependencies, name: Vulnerable dependencies}
+      - {id: duplicate-dependencies, name: Duplicate dependencies}
+      - {id: abandoned-packages, name: Abandoned packages}
+      - {id: version-incompatibilities, name: Version incompatibilities}
+      - {id: transitive-dependencies, name: Transitive dependencies}
+      - {id: unpinned-dependencies, name: Unpinned dependencies}
+      - {id: lockfiles, name: Lockfiles}
+      - {id: runtime-incompatibilities, name: Runtime incompatibilities}
+  - id: iac
+    name: Infrastructure as Code
+    category: deployment
+    topics:
+      - {id: insecure-defaults, name: Insecure defaults}
+      - {id: public-resources, name: Public resources}
+      - {id: overly-broad-permissions, name: Overly broad permissions}
+      - {id: missing-encryption, name: Missing encryption}
+      - {id: missing-backups, name: Missing backups (IaC)}
+      - {id: missing-lifecycle-rules, name: Missing lifecycle rules}
+      - {id: configuration-drift, name: Configuration drift}
+      - {id: hardcoded-secrets, name: Hardcoded secrets (IaC)}
+      - {id: missing-resource-limits, name: Missing resource limits (IaC)}
+  - id: testing
+    name: Testing
+    category: testing
+    topics:
+      - {id: unit-tests, name: Unit tests}
+      - {id: integration-tests, name: Integration tests}
+      - {id: api-tests, name: API tests}
+      - {id: database-tests, name: Database tests}
+      - {id: security-regression-tests, name: Security regression tests}
+      - {id: concurrency-tests, name: Concurrency tests}
+      - {id: e2e-tests, name: End-to-end tests}
+      - {id: smoke-tests, name: Smoke tests}
+      - {id: load-tests, name: Load tests}
