@@ -135,6 +135,30 @@ vibeguard fix examples/vulnerable-app --safe
 Each repair lands on its own commit on a `vibeguard/fix-YYYY-MM-DD` branch, with a
 generated repro test as its evidence.
 
+## Web UI
+
+If a terminal is not where you live, VibeGuard ships a local web app that does the same
+things by clicking:
+
+```bash
+pip install "vibeguard[ui] @ git+https://github.com/Gypsy46n2/VibeGuard.git"
+vibeguard ui                    # opens http://127.0.0.1:8321/ in your browser
+vibeguard ui ~/code/my-app      # start the folder picker somewhere specific
+```
+
+Pick a folder from a point-and-click browser, press **Audit (read-only)**, and watch the
+scan happen: stages as they run, findings counting up by severity as they are found.
+When it finishes you get the readiness score, the architecture and category diagrams,
+every finding expandable with its evidence and its fix, the full production checklist,
+and the markdown / HTML / JSON reports to download. Scans are remembered per folder, so
+the sidebar is your history. If anything is safely repairable, a separate card appears
+*after* the results, tells you exactly what safe mode will do, and does nothing until
+you tick the box and press the button.
+
+The server binds `127.0.0.1` and nothing else, opens no outbound connections, and uses
+the same engine, rules and report as the CLI — it is a front end, not a second
+implementation. Use `--port` to move it and `--no-browser` to keep it in the terminal.
+
 ## What `fix` actually repairs
 
 Autofix is deliberately narrow, and the README will not pretend otherwise. Of the 117
@@ -206,13 +230,15 @@ An unmeasured node is always drawn neutral — it must never look like a healthy
 | `vibeguard report PATH` | Re-render the last recorded scan — no rescan, no repository access. |
 | `vibeguard ci PATH` | Audit plus a severity gate. Exit 1 when the gate fails. |
 | `vibeguard graph PATH` | Draw the inferred architecture as mermaid or SVG. Discovery only. |
+| `vibeguard ui [PATH]` | Serve the local web UI on 127.0.0.1. Needs the `[ui]` extra. |
 | `vibeguard baseline create\|show PATH` | Accept today's findings so CI gates only on new ones. |
 | `vibeguard doctor` | What is available here: python, git, tree-sitter, each adapter. |
 | `vibeguard rules` | Every registered rule with its category, scale, and autofix class. |
 
 Common flags: `--output table,json,jsonl,md,html,all` · `--local-only` · `--packs` ·
 `--deep` (audit) · `--safe` / `--interactive` / `--deep-validate` / `--allow-no-git`
-(fix) · `--fail-on` / `--baseline` (ci) · `--format mermaid|svg` / `--out` (graph).
+(fix) · `--fail-on` / `--baseline` (ci) · `--format mermaid|svg` / `--out` (graph) ·
+`--port` / `--no-browser` (ui).
 
 Footprint flags: `--report-dir DIR` (audit, fix, ci, report, `baseline create|show`)
 writes the reports *and* `DIR/.vibeguard/` there instead of into the repository, and

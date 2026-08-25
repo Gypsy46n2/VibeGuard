@@ -562,3 +562,50 @@ an exception for an empty directory.
 
 `fix` has no `--no-write`. Its whole purpose is to change the repository, and a fix run
 that refused to record what it changed would be a worse trade than not running it.
+
+### D61. The web UI binds 127.0.0.1, and that is not a flag
+
+`vibeguard ui` has no login, no token, and no CSRF defence, because it does not need
+any: the socket is bound to the loopback interface, so the only clients that can reach
+it are processes already running as the user whose files it reads. That is a complete
+security argument exactly once — the moment the bind address becomes configurable, an
+unauthenticated endpoint that runs arbitrary code paths over arbitrary directories is
+listening on a network. So `HOST` is a module constant, `serve()` takes a port and not
+an address, and there is no `--host` flag to be talked into using.
+
+The same reasoning sets the file-access boundary. Every endpoint that takes a `path`
+resolves it and then checks it against a fixed list of roots — the user's home
+directory, plus whatever directory `vibeguard ui PATH` was pointed at. Resolution
+happens *before* the check, so `..` segments and symlinks are normalised away rather
+than trusted. Stored reports are addressed by matching an id against the filenames that
+actually exist in the history directory, never by joining a client string onto a path.
+
+The front end is one self-contained HTML file with inline CSS and JavaScript, held to
+the same bar as the HTML report (D-series on reporting): no CDN, no webfont, no
+external anything. A security tool that phones home to render its own UI has given up
+the argument. Report data — which contains code snippets, file names and rule output
+from the repository under audit — is written into the DOM with `textContent` and
+`createElement` only. The single `innerHTML` assignment in the file takes the SVG our
+own renderer produced on this machine, and the test suite asserts that it stays the
+only one.
+
+### D62. The UI offers safe-mode repairs only, and asks first
+
+`Engine.fix` has two modes. Safe mode applies the provably-safe subset unattended;
+interactive mode shows a human one unified diff at a time and asks. The web UI exposes
+safe mode and stops there. Interactive mode is a *conversation* — a diff, a judgement,
+an answer, repeated — and a v1 web UI has nowhere honest to hold it; approximating it
+with a page of checkboxes would turn "you reviewed this change" into "you clicked past
+this change", which is worse than not offering it at all.
+
+`POST /api/fix` additionally requires `confirm: true` in the body. Routing is not
+consent: a request that reaches the repair endpoint by accident — a stale tab, a
+retried fetch, a misconfigured proxy — must not be able to write to someone's
+repository. The UI mirrors that in the one place it matters: the repair card appears
+only *after* results, only when there is something safely fixable, explains what safe
+mode will do, and leaves its button disabled until the user ticks a box. Nothing ever
+autostarts.
+
+The dirty-worktree refusal is preflighted in the request handler rather than left to
+the background job, so it comes back as an HTTP status with the engine's own message
+instead of opening a progress stream that immediately dies.

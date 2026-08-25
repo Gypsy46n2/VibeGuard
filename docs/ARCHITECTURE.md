@@ -208,8 +208,11 @@ leave the machine, the CLI says so explicitly before sending.
    report object; events via subscription.
 3. Agent-plugin: thin JSON-lines mode (`--output jsonl`) streaming events, so an agent
    host renders progress live; plus a `plugin.json` manifest.
-4. Future API/dashboard: the JSON report + event stream are the contract; no web
-   server in MVP.
+4. Local web UI (`vibeguard ui`, optional `[ui]` extra): a FastAPI app that uses the
+   Engine as a library and bridges the EventBus onto Server-Sent Events. The JSON
+   report + event stream are still the whole contract — the UI adds no data of its
+   own beyond the diagrams our renderers already produce. Loopback-only, safe-mode
+   repairs only (D61, D62).
 
 ## 11. CLI surface
 
@@ -223,6 +226,7 @@ vibeguard ci     PATH [--fail-on high] [--baseline] [--report-dir DIR] [--no-wri
 vibeguard baseline create|show PATH [--report-dir DIR]
 vibeguard doctor                 # which adapters/validators are available
 vibeguard rules  [--pack X]      # list rules with applicability
+vibeguard ui     [PATH] [--port 8321] [--no-browser]   # local web UI, 127.0.0.1 only
 ```
 
 Config: `.vibeguard.toml` at repo root (packs, thresholds, suppressor policy, AI

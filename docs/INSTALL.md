@@ -12,7 +12,8 @@ optional extras below only *add* coverage — they never gate it.
 | pip | `pip install git+https://github.com/Gypsy46n2/VibeGuard.git` | Inside a project virtualenv, or when you also embed the library. |
 | pip + scanners | `pip install "vibeguard[scanners]"` | You want bandit / detect-secrets / pip-audit / checkov / semgrep merged in. |
 | pip + AI | `pip install "vibeguard[ai]"` | You want the `anthropic` SDK or an OpenAI-compatible endpoint. |
-| pip, everything | `pip install "vibeguard[scanners,ai,dev]"` | Contributing. |
+| pip + web UI | `pip install "vibeguard[ui]"` | You would rather click than type. Adds `vibeguard ui` — see below. |
+| pip, everything | `pip install "vibeguard[scanners,ai,ui,dev]"` | Contributing. |
 | Docker | `docker run --rm -v "$PWD":/repo vibeguard (local build: docker build -t vibeguard .) audit /repo` | No Python on the machine, or a hermetic CI step. |
 | From source | `git clone … && pip install -e ".[dev]"` | Developing rules. |
 | GitHub Action | `uses: Gypsy46n2/VibeGuard@main` | CI. See [PLUGINS.md](PLUGINS.md#ci-surfaces). |
@@ -39,6 +40,24 @@ into `Finding`s — no source is vendored, so no licence is inherited.
 
 Adapters that are not installed are simply skipped, and `ScanReport.adapters_used`
 records that they were, so a report never implies coverage it did not have.
+
+### `[ui]` — the local web UI
+
+```bash
+pip install "vibeguard[ui]"
+vibeguard ui                 # http://127.0.0.1:8321/, opens your browser
+vibeguard ui ~/code/my-app   # start the folder picker there
+vibeguard ui . --port 9000 --no-browser
+```
+
+Adds `fastapi` and `uvicorn`, and nothing else — the front end is one self-contained
+HTML file inside the wheel, with no CDN, no webfont and no build step. The server binds
+`127.0.0.1` only and may browse your home directory plus the `PATH` you gave it;
+everything else is refused. Repairs from the UI are **safe mode only**, and require an
+explicit confirmation before anything is written.
+
+Without the extra, `vibeguard ui` exits 2 and tells you what to install. Every other
+command is unaffected — nothing in the core import graph reaches into `vibeguard.ui`.
 
 ### Tools installed separately
 
