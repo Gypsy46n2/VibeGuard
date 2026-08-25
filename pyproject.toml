@@ -51,7 +51,9 @@ dev = [
 vibeguard = "vibeguard.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/vibeguard/vibeguard"
+Homepage = "https://github.com/Gypsy46n2/VibeGuard"
+Source = "https://github.com/Gypsy46n2/VibeGuard"
+Issues = "https://github.com/Gypsy46n2/VibeGuard/issues"
 
 # Third-party rule packs register themselves under this entry-point group; the
 # registry (vibeguard.core.registry) discovers them at runtime:
@@ -66,7 +68,7 @@ packages = ["src/vibeguard"]
 artifacts = ["src/vibeguard/rules/topics.yaml"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/vibeguard", "tests", "docs", "README.md", "pyproject.toml"]
+include = ["src/vibeguard", "tests", "docs", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.ruff]
 line-length = 100
