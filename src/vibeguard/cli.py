@@ -40,6 +40,7 @@ from rich.table import Table
 
 from vibeguard import __version__
 from vibeguard.adapters import build_adapters
+from vibeguard.ai import AIGateway, NullProvider
 from vibeguard.baseline import (
     HISTORY_DIRNAME,
     Baseline,
@@ -824,7 +825,8 @@ def doctor() -> None:
             if version:
                 detail_bits.append(version)
         elif not available:
-            detail_bits.append("optional — install with the [scanners] extra")
+            # Escaped: rich would read "[scanners]" as a style tag and swallow it.
+            detail_bits.append(r"optional — install with the \[scanners] extra")
         if adapter.requires_network:
             detail_bits.append("network required (skipped under --local-only)")
         table.add_row(
@@ -833,10 +835,22 @@ def doctor() -> None:
             " · ".join(detail_bits) or adapter.description,
         )
 
+    # The AI layer, as configured *here* — including whether a completion would leave
+    # this machine. Nothing is probed over the network to answer this.
+    config = VibeguardConfig.load(Path.cwd())
+    gateway = AIGateway.from_config(config)
+    if isinstance(gateway.provider, NullProvider):
+        ai_status = "[dim]deterministic[/]"
+    elif gateway.available:
+        ai_status = "[green]available[/]" if gateway.is_local else "[yellow]remote[/]"
+    else:
+        ai_status = "[yellow]configured, unusable[/]"
+    table.add_row("ai provider", ai_status, gateway.describe())
+
     console.print(table)
     console.print(
         "[dim]adapters are optional; VibeGuard's built-in rules run with zero external "
-        "installs.[/]"
+        "installs. AI is optional too — the default provider is 'null'.[/]"
     )
     raise typer.Exit(EXIT_OK)
 

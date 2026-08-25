@@ -356,3 +356,128 @@ an air-gapped machine, so "self-contained" is enforced by construction and asser
 `test_html_is_self_contained` rather than promised. The filter box hides itself under
 `<noscript>`; everything else (collapsing via `<details>`, colour, tables) is pure
 CSS/HTML, so the document is fully usable with scripting off.
+
+## M5 — AI layer, repro tests, examples, packaging, docs
+
+### D41. VibeGuard emits four event names beyond INTERFACES.md §6
+
+§6 lists ten names and calls them exact. They are never edited or reordered;
+`EVENT_NAMES` still holds precisely those ten. The AI gateway and the repro-test
+runner need to announce things §6 could not have named, so `EXTENSION_EVENT_NAMES`
+adds `ai.external_send`, `ai.blocked`, `repro.generated`, and `repro.result`, and
+`ALL_EVENT_NAMES` is their union. Additive is safe: a subscriber written against §6
+matches its patterns and simply never sees the new names. Every one of them is
+documented, with its payload keys, in `plugin.json` and `docs/PLUGINS.md`.
+
+### D42. `is_local` is computed from the endpoint, never configured
+
+INTERFACES.md §10 declares `is_local` as an attribute of `AIProvider`. Letting a
+config file *assert* it would make the `local_only` gate a promise rather than a
+check, so `OpenAICompatibleProvider` derives it from the endpoint host
+(`localhost`, `127.0.0.1`, `::1`, `0.0.0.0`, `*.local`), `AnthropicProvider` hardcodes
+`False`, and `NullProvider` hardcodes `True`. The host check is deliberately
+name-based: resolving DNS would itself be a network call, and a hostile resolver could
+make a remote host look local. Anything unrecognised is *not* local, so the gate errs
+towards refusing a provider rather than permitting one.
+
+### D43. One gateway owns every completion, and `ai_used` means "a completion came back"
+
+ARCHITECTURE.md §9 requires the CLI to say so before code leaves the machine. Rather
+than trust each call site to remember, `AIGateway.complete()` is the only path to a
+provider: it emits `ai.external_send` and prints the notice *before* invoking a
+non-local provider (`test_the_notice_precedes_the_request` asserts the ordering), and
+sets `used = True` only *after* a completion has actually been returned. So
+`ScanReport.ai_used` is false for a provider that was configured but never called, or
+called and failed — the report describes what happened, not what was intended.
+
+### D44. A `requires_ai` rule without a provider does not run at all
+
+The alternative — running it in some degraded mode — would put a rule's name in the
+"detectors that ran" column without the analysis behind it. Instead `select_rules`
+skips it, `_gate_reason` reports `requires an AI provider (none available —
+deterministic run)` on the checklist's NOT_APPLICABLE rows, and `ScanReport.warnings`
+names every skipped rule. Coverage that was not obtained is never implied.
+
+### D45. A repro test is anchored to one finding, not to a file
+
+A file-scoped property ("no call in this file lacks a timeout") would fail after a
+correct fix whenever a second, unrepaired defect of the same rule remained in the same
+file — rolling back a good patch. Every generated test therefore carries `SNIPPET`, the
+normalised snippet of the finding it was generated for, and only counts a defect whose
+text overlaps it. This is exactly per-finding by construction: a fingerprint is
+`rule|path|normalised snippet`, so two occurrences with identical text *are* one
+finding.
+
+### D46. A repro test that passes before the fix is discarded
+
+`ReproRunner.prepare` runs the generated test *before* the patch and returns it only
+when it fails. Passing means the template did not capture this defect — a template
+gap, a shape it does not model — and keeping it would let a meaningless green tick
+become the evidence for `FIXED`. An inconclusive run (no pytest, a timeout, a
+collection error) is treated the same way. Both cases delete the file and proceed
+without repro evidence, which is the pre-M5 behaviour exactly.
+
+### D47. The repro result is a `ValidationStep` named `tests:repro`
+
+INTERFACES.md §5 passes `repro_passed` to `verdict()` separately from `steps`, and §5's
+step-name vocabulary is the ladder's. Passing the flag alone would leave the evidence
+invisible in the report, so the outcome is *also* appended as a step named
+`tests:repro` — not one of the ladder's eight names, because it is not a ladder rung.
+A passing repro step therefore satisfies "≥1 non-skipped pass", which is the intended
+consequence: a Dockerfile repair that no rung could confirm is now `FIXED` on the
+strength of a test that failed before it and passes after, instead of `UNVERIFIED`.
+
+### D48. The ladder's pytest rungs ignore `.vibeguard/`
+
+Generated repro tests live in the scanned repository and are failing by design until
+their fix lands. Collected by a bare `pytest`, one pending repair would mark every
+later fix as having broken the project's test suite. Both pytest rungs pass
+`--ignore=.vibeguard`: our own scaffolding is never counted as the project's tests.
+
+### D49. Example secrets are fabricated but not "EXAMPLE"-shaped
+
+The secrets pack correctly treats any value containing `example`, `changeme`,
+`placeholder` and friends as documentation rather than a credential. Filling
+`examples/vulnerable-app` exclusively with such values would have made a secrets
+scanner demo in which no secret is found. The committed `.env` keeps recognisable
+documentation placeholders (including AWS's own `AKIAIOSFODNN7EXAMPLE`), while the
+values that exist to demonstrate detection — the JWT signing secret, the admin
+password — are fabricated strings that match nothing real and are labelled as
+fabricated in a comment beside them.
+
+### D50. `examples/repaired-app` is generated, and only its path is edited
+
+It was produced by copying the vulnerable app, `git init`, and
+`vibeguard fix . --safe`; the result was copied back verbatim, including the report and
+the generated repro tests. The single edit is the absolute scratch path inside
+`vibeguard-report.{md,json}`, rewritten to `examples/repaired-app`. The example's
+README says so. Nothing else about the run — the counts, the statuses, the residual
+risks — is touched, because an example that quietly improves on the real behaviour is
+worse than no example.
+
+### D51. `ruff` does not lint `examples/`
+
+The vulnerable app is broken on purpose and the repro tests under
+`examples/repaired-app/.vibeguard/repro/` are machine-generated. Linting them would be
+linting test data, and "fixing" them would delete the findings
+`tests/test_examples.py` asserts on. `[tool.ruff] extend-exclude = ["examples"]`.
+
+### D52. VibeGuard's own image has no HEALTHCHECK, and says why
+
+`VG-CTR-002` wants a HEALTHCHECK on a runnable image, and our Dockerfile does not have
+one. It is a one-shot CLI: there is no long-running process for a probe to ask about,
+and the rule only fires on images with a server-shaped CMD. The Dockerfile carries that
+reasoning as a comment rather than leaving a reader to wonder whether we forgot. Every
+other container rule we ship *is* honoured: pinned slim base, dependencies installed
+before the source is copied, no build toolchain in the final layer, and a uid-10001
+non-root user.
+
+### D53. Self-audit in CI is informational
+
+`vibeguard audit .` on this repository is noisy by construction: a codebase whose
+purpose is to hold patterns for insecure code is full of the strings those rules match.
+The `dogfood` job runs it with `continue-on-error` so the output is archived and
+readable without gating the build, and gates instead on
+`vibeguard ci examples/vulnerable-app` — where a *failure* is the expected result, and
+a following step asserts the gate really did fail. Gating on a scan we know to be
+noisy would train everyone to ignore it.
