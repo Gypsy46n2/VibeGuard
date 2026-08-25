@@ -105,6 +105,14 @@ absence a defect?"**
 weekend project with no `/healthz` is not broken; a system with an orchestrator
 restarting it is.
 
+`min_scale` bounds the project; it does not bound *which part of the project* an
+argument applies to. If a rule reasons from "a second instance behind a load balancer
+would…", it needs a request path to point at, not merely a web framework in the
+manifest — a CLI that ships a small local web UI has one of those. `VG-SCALE-001` and
+`VG-SCALE-003` use `scaling._signals.is_request_path(ctx, rel)` for this (DECISIONS.md
+D66). The general form of the question: *what has to be true of this code for my
+`why_it_matters` paragraph to be true?* Gate on that, not on a proxy for it.
+
 If your rule fires on the wrong sort of project, the fix is usually `min_scale` — and
 occasionally an override:
 
@@ -157,6 +165,61 @@ Pick the lowest tier that settles the question:
 
 Rules must never raise on normal input, must be bounded (cap findings per rule — the
 built-ins use 3–10), and must never write anything.
+
+### A *mention* is not an occurrence
+
+Any rule at tier 2 will, sooner or later, match its own subject inside a docstring, a
+comment, or a prose string. Ours did: `VG-SEC-018` reported itself four times, because
+its `description` has to contain the literal words `verify=False`.
+
+`rules/_support` exports the cure:
+
+```python
+from vibeguard.rules._support import is_non_code_line, is_non_code_span
+
+if is_non_code_line(ctx, rel, line_no):
+    continue                                   # the whole line is string/comment content
+```
+
+`is_non_code_line` is true only when a line carries **no executable tokens at all** —
+a docstring body, a wrapped prose string, a block comment. That definition is what
+makes it safe to switch on: `SECRET_KEY = "hunter2"` and
+`headers.update({"Access-Control-Allow-Origin": "*"})` both carry code, so rules whose
+subject genuinely *is* a string value keep working untouched.
+
+`RegexRule` exposes the same thing as `skip_non_code: ClassVar[bool] = True`, opt-in
+per rule.
+
+`is_non_code_span(ctx, rel, line_no, match.start(), match.end())` is stricter: it asks
+whether the *match* sits inside one string. Use it only where the reading is
+unambiguous — `print(` inside a string literal is the word "print", never a call. Do
+**not** use it where a string can legitimately carry the defect: `curl -k` inside a
+shell command string, a `SELECT *` inside a query, a credential inside a connection
+string.
+
+If you find yourself reaching for either helper on every line of a rule, that is a
+signal the rule belongs at tier 3 instead: an AST rule that inspects real call nodes
+never had this problem in the first place.
+
+### Whose project is this file describing?
+
+`ctx.files` is everything scanned, including `tests/`, `examples/`, and `vendor/`.
+Detection rules should keep scanning all of it — a real vulnerability in a test file is
+still a vulnerability, and `source_files(..., skip_tests=True)` is available when a
+particular rule wants otherwise.
+
+But a rule that makes a claim about **the project as a whole** — "this project is
+orchestrated with Kubernetes", "these are its declared dependencies", "there is no
+lockfile" — must read primary files only, or a fixture Deployment manifest will make
+that claim for it:
+
+```python
+if ctx.is_fixture(rel):
+    continue                       # material this project carries, not what it is
+```
+
+See DECISIONS.md D64. Discovery already applies the split to the tech profile and the
+scale class, so `ctx.tech` and `ctx.scale` need no extra care.
 
 ### `make_finding`
 

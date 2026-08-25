@@ -609,3 +609,179 @@ autostarts.
 The dirty-worktree refusal is preflighted in the request handler rather than left to
 the background job, so it comes back as an HTTP status with the engine's own message
 instead of opening a progress stream that immediately dies.
+
+## M4 — dogfooding: VibeGuard audits itself
+
+VibeGuard scored itself 59/100. Reading *why* turned out to be the most productive bug
+report the project has had: almost none of the gap was our code, and almost all of it
+was rules making claims they could not support. The eight decisions below are the
+fixes. Every one of them is a change to the product, not a change to our repository —
+"can't give away a dirty shirt" only works if the shirt gets washed the same way
+everyone else's does.
+
+### D63. A *mention* of a dangerous pattern is not *doing* it
+
+Text and regex rules match source lines, so they also match the same text inside a
+docstring, a comment, or a prose string. Our own rule sources are the extreme case —
+`VG-SEC-018`'s `description` has to contain the literal words `verify=False`, and it
+was reported four times for saying so — but the problem is entirely general: help
+strings, changelog comments, and a test's explanatory prose all describe dangerous
+patterns without executing them.
+
+`rules/_literals` answers one question: **is line *n* made of nothing but string and
+comment content?** That phrasing is what keeps it surgical. A docstring line or a
+wrapped prose string carries no executable tokens, so it is "non-code". A line like
+`response.headers.update({"Access-Control-Allow-Origin": "*"})` *does* carry
+executable tokens, so it stays in scope — every rule whose subject genuinely is a
+string value (hardcoded secrets, connection strings, CORS header values) is unaffected
+by construction rather than by exception list.
+
+Backends: `tokenize` for Python (exact, including implicit concatenation and
+f-strings, whose interpolations remain code); tree-sitter for JS/TS, masking `comment`
+/ `string` / `template_string` but *un*-masking `template_substitution` so
+`${dangerous()}` is still code; a conservative quote-and-comment lexer as fallback.
+Anything unparsable yields an empty set, which is the pre-existing behaviour.
+
+`is_non_code_span` is the stricter sibling: it asks whether a *match* sits inside one
+string. It is used only where the reading is unambiguous — `print(` inside a string
+literal is the word "print", never a call — because for `curl -k` inside a shell
+string the opposite reading is the right one.
+
+`RegexRule.skip_non_code` is opt-in, defaulting to off. `SelectStarRule` deliberately
+does not opt in: `SELECT * FROM users` on its own line inside a triple-quoted SQL
+string is non-code by this definition and is also a true finding.
+
+### D64. Fixtures and examples are material a project *carries*, not what it *is*
+
+Discovery read our `tests/fixtures/` and `examples/vulnerable-app/` as our production
+stack and reported VibeGuard — a Python CLI — as flask + fastapi + express + sqlite +
+postgres + k8s + jwt, `large`, 37,430 LOC, 7 services. That misprofile then switched on
+scale-gated rules (`VG-SCALE-*`, `VG-CTR-012`) that had nothing to do with this
+project, and pointed the dependency rules at somebody else's `requirements.txt`.
+
+`discovery/paths` splits the scanned file list into **primary** and **fixture**
+material (`tests/`, `spec/`, `fixtures/`, `examples/`, `sample*`, `demo*`, `vendor/`,
+`third_party/`, `testdata/`, `node_modules/`, `site-packages`, `dist/`, `build/`, and
+test-shaped file names). Tech detection, LOC, service counts, and sensitivity read
+**primary only**. `ScanContext.primary_files` and `ScanContext.is_fixture()` carry the
+split to the rules that make project-level claims — which manifest declares our
+dependencies, which orchestrator we deploy with.
+
+The distinction that matters, and that the code keeps crisp: **this is about the tech
+profile and scale inference, never about skipping detection.** Every rule still scans
+every file. A real vulnerability in `tests/` is still a vulnerability, and our own
+audit still reports 48 of them across our fixtures.
+
+Everything is relative to the *scan root*, which is what makes it correct in both
+directions: `examples/vulnerable-app/app.py` is fixture material when you scan the
+repository and is plain `app.py` — primary — when you scan that directory directly,
+where it still profiles as flask + sqlite. When *every* file looks like fixture
+material the split is abandoned and all files count as primary: that means the scan
+root is itself a test tree, and profiling it as "no project at all" would be worse.
+
+Configurable as `[vibeguard] fixture_paths = [...]`, which extends the defaults rather
+than replacing them (the same rule `exclude` already follows).
+
+### D65. Two regex bugs in VG-COST-004, found by pointing it at ourselves
+
+`_MAX_FILE_BYTES = 2_000_000` was reported as "binary content stored in a database
+column" because `FILE_BYTES` matched `(?:file)_?(?:bytes)\s*=`. The name now has to
+*start* a word. Separately, the bare `\bBLOB\b` alternative matched the string
+`"blob"` used as a dict key inside the rule's own source; it now requires an
+identifier before it, which is what a SQL column declaration looks like
+(`avatar BYTEA`).
+
+Neither was about strings or fixtures. They were just wrong, and would have fired on
+any project with a byte-size constant.
+
+### D66. Multi-instance claims require a request path
+
+`VG-SCALE-001` and `VG-SCALE-003` argue from "a second instance behind a load balancer
+would keep its own copy" and "a restart wipes every session". Both reported VibeGuard's
+tree-sitter parser cache in `discovery/context.py`. The reasoning does not survive
+contact with a CLI, and this is precisely the disproportionate advice the product
+promises not to give.
+
+Gating on "a web framework is in the stack" was not enough, because it is true of us:
+`vibeguard ui` really does build a FastAPI app. `scaling/_signals.is_request_path()`
+narrows it to the *part of the repository that serves requests* — the directories where
+a server is constructed (`Flask(`, `FastAPI(`, `express()`, `app.use(`, a route
+decorator) or which are Django's by name (`urls.py`, `views.py`, `manage.py`, `wsgi.py`).
+A root-level `app.py` makes the whole tree count, which is the right answer for a flat
+app. When a framework is declared but no wiring can be located, the check falls back to
+the whole tree: narrowing on a guess would silently drop true findings, and a false
+negative here is worse than the false positive we started with.
+
+### D67. One constraint, restated, is not a dependency conflict
+
+`VG-DEPS-003` flagged `fastapi>=0.110` appearing in both our `ui` extra and the `dev`
+extra that tests it. Two optional groups needing the same package at the same
+constraint is ordinary packaging; the resolver has nothing to choose between. The rule
+now requires either a genuine repeat *within one section*, or constraints that actually
+differ. (It found a real one immediately afterwards: `httpx` was unconstrained in the
+`ai` extra and `>=0.27` in `dev`. That one we fixed in `pyproject.toml`.)
+
+### D68. A HEALTHCHECK is for a service, not for a CLI image
+
+`VG-CTR-002` fired on our own Dockerfile, whose entrypoint is `vibeguard` and whose
+`CMD` is `["--help"]`. A HEALTHCHECK asks "is the service working?"; a one-shot tool
+has no service for the probe to ask about, and the runtime never runs a probe on a
+container that exits anyway. The rule now needs evidence that the final stage builds a
+long-running service: an `EXPOSE`, or a CMD/ENTRYPOINT naming a server runner
+(gunicorn, uvicorn, nginx, `node server.js`, `npm start`, …). This also brings
+detection in line with the rule's own `fix()`, which already refused to guess a port
+without an `EXPOSE`.
+
+The Dockerfile keeps its comment saying why it has no HEALTHCHECK. D52 stands; it is
+now the rule that agrees with it rather than the comment that excuses it.
+
+### D69. Key material is measured, not just announced
+
+`VG-SCR-005` reported CRITICAL "private key committed" on `tests/test_redact.py` and
+`tests/test_rules_secrets.py` — the unit tests for our own redaction, whose constants
+are obviously truncated stubs. A CRITICAL on a redaction test is wrong, and it is wrong
+for every secret scanner's test suite, not just ours.
+
+Detection by *file name* (`id_rsa`, `server.key`, `*.pem`) is unchanged and stays
+CRITICAL wherever it is found. The inline case now measures the base64 body after the
+header: at least 20 characters anywhere, and at least 400 in a test, spec, or fixture
+file. A real 2048-bit RSA key is well over a kilobyte of base64, so a real key
+committed to `tests/` is still CRITICAL — the allowance is a size threshold, not an
+exemption. `\n` escape sequences are stripped first, so a key pasted into a one-line
+source string is measured exactly like a PEM file.
+
+### D70. `scan.discovery_progress`, an additive event
+
+Discovery walks the whole tree, reads every manifest, and counts every line before a
+single rule runs. On a large repository that is a silent minute that looks like a hang.
+
+`scan.discovery_progress` refines the existing `scan.stage` with `phase`, `files`,
+`total`, and `detail`, throttled in the orchestrator to at most one event per 250 files
+or 250 ms. Following D41, `INTERFACES.md §6` is untouched and the name lives in
+`EXTENSION_EVENT_NAMES`: a subscriber that only knows the contract simply never matches
+it.
+
+The CLI renders it under the phase name in a spinner on **stderr**, so it can never
+contaminate `-o json` or `-o jsonl` on stdout, and is skipped entirely when stderr is
+not a terminal. The web UI turns it into a file counter on the "Reading the project"
+row; if the server never emits it, the row behaves exactly as before.
+
+### D71. What VibeGuard still reports about VibeGuard
+
+After D63–D70 the self-audit is 79/100 with 55 findings, of which **48 are inside
+`tests/fixtures/` and `examples/vulnerable-app/`** — files that are supposed to be
+broken and that `tests/test_examples.py` asserts on. Seven are about this project:
+
+* Six `VG-DEPS-002` (low): our runtime dependencies are declared `>=` with no upper
+  bound. This stays reported and unfixed on purpose. Capping a *library's* dependencies
+  is a packaging anti-pattern, but VibeGuard is also an installed tool with no lockfile
+  of its own, so "a future pydantic 3 installs silently" is a real description of our
+  risk. The rule is right that it is a trade-off; we have made the other choice, and
+  the honest thing is to leave the finding visible rather than to tune the rule until
+  it agrees with us.
+* One `VG-DEPS-005` (info): the offline rules cannot check a registry for abandoned or
+  yanked packages. That is a statement about what a local scan can know, and it is
+  meant to be there.
+
+Nothing is suppressed, and there is no `.vibeguard/suppressions.yml`. A score reached
+by hiding findings would be worth less than the 59 we started with.

@@ -391,6 +391,7 @@ additive extensions, and a subscriber that only knows §6 simply never matches t
 | `ai.blocked` | `provider`, `reason`, `local_only` | `local_only` refused a non-local provider. |
 | `repro.generated` | `finding`, `rule_id`, `path`, `describes` | A repro test was written. |
 | `repro.result` | `finding`, `rule_id`, `path`, `phase` (`before`/`after`), `passed`, `detail` | A repro test was run. `passed: null` means inconclusive. |
+| `scan.discovery_progress` | `phase`, `files`, `total` (may be `null`), `detail` | Repeatedly *during* discovery, refining the current `scan.stage`. Throttled to at most one event per 250 files or 250 ms (DECISIONS.md D70). |
 
 Payloads are JSON-serialisable dicts. Treat them as additive: new keys may appear.
 

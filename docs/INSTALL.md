@@ -141,6 +141,7 @@ What each row means for you:
 [vibeguard]
 packs      = ["security", "secrets", "api", "database", "containers"]  # default: all
 exclude    = ["docs/generated/**"]     # extends the built-in excludes, never replaces
+fixture_paths = ["playground"]         # extends the built-in fixture paths (see below)
 local_only = false
 report_dir = "../vibeguard-out"        # default: the scanned repository itself.
                                        # Relative paths resolve against this file.
@@ -166,6 +167,26 @@ validation_timeout_targeted = 120
 enabled = true
 keep    = 50                    # 0 keeps everything
 ```
+
+### `fixture_paths` — what is *this* project, and what does it merely carry?
+
+`tests/`, `spec/`, `fixtures/`, `examples/`, `sample*`, `demo*`, `vendor/`,
+`third_party/`, `testdata/`, `node_modules/`, `site-packages`, `dist/`, and `build/`
+are recognised out of the box, along with test-shaped file names (`test_x.py`,
+`x.spec.ts`, `conftest.py`).
+
+Files under these paths are **still scanned** — a real vulnerability in `tests/` is
+still a vulnerability, and it is still reported. What they do *not* do is define the
+project: the technology stack, the LOC count, the service count, and the sensitive-data
+flag are all read from the rest of the tree. Without that split a Python CLI that ships
+a deliberately-vulnerable Flask example gets profiled as a large Flask + Kubernetes
+deployment, and every scale-gated rule fires on a project it has never applied to.
+
+Everything is relative to the directory you scan, so pointing `vibeguard` straight at
+`examples/my-demo/` profiles that app on its own terms. `fixture_paths` extends the
+defaults; it never replaces them. Bare names match any directory component, and a value
+containing `/` is matched against the whole relative path.
+
 
 `.gitignore` is always honoured on top of `exclude`, and VibeGuard's own outputs
 (`.vibeguard/`, `vibeguard-report.*`) are always excluded — a previous run's findings

@@ -253,8 +253,11 @@ Exit codes: `0` ok · `1` findings at or above the threshold · `2` execution er
 ## The pipeline
 
 **Detect.** Discovery first — languages, frameworks, databases, ORMs, containers, CI,
-and a scale class (`toy | small | medium | large`). Every rule declares the minimum
-scale it applies to, and rules that do not apply report nothing. Then 117 built-in
+and a scale class (`toy | small | medium | large`). Test, fixture, example, and
+vendored trees are still scanned, but they do not get to define the stack or inflate
+the scale: the Flask demo in your `examples/` folder is something your project
+*carries*, not something it *is* (configurable via `fixture_paths`). Every rule
+declares the minimum scale it applies to, and rules that do not apply report nothing. Then 117 built-in
 rules across 16 packs run, plus any of the 8 external adapters that happen to be
 installed (bandit, detect-secrets, pip-audit, checkov, semgrep, hadolint, trivy,
 npm-audit), deduplicated by fingerprint.

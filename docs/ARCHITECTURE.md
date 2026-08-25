@@ -110,7 +110,15 @@ CLI renders and that API/plugin hosts can subscribe to.
 
 ## 5. Discovery & proportionality
 
-`discovery/` produces:
+`discovery/` first splits the scanned file list into **primary** and **fixture**
+material (`discovery/paths.py`): `tests/`, `spec/`, `fixtures/`, `examples/`,
+`sample*`, `demo*`, `vendor/`, `third_party/`, `node_modules/`, `dist/`, `build/`, and
+test-shaped file names. Everything below is derived from the *primary* set only, so a
+project is profiled by what it **is** rather than by what it happens to carry. Rules
+still scan every file; the split governs identity, not detection (DECISIONS.md D64).
+Extend the defaults with `[vibeguard] fixture_paths`.
+
+`discovery/` then produces:
 
 - **TechProfile** — languages, frameworks (frontend/backend), DBs, ORMs, package
   managers, containers, CI/CD, IaC, test frameworks, caches, brokers, workers,
@@ -126,7 +134,14 @@ CLI renders and that API/plugin hosts can subscribe to.
   scale demands it.
 
 Rule applicability = tech match ∧ scale match ∧ file-presence preconditions. Rules that
-don't apply report nothing (or `NOT_APPLICABLE` in deep audits).
+don't apply report nothing (or `NOT_APPLICABLE` in deep audits). Scale bounds the
+*project*; where an argument only holds for part of one — "a second instance would keep
+its own copy of this" — the rule must additionally locate that part
+(`scaling._signals.is_request_path`, DECISIONS.md D66).
+
+Discovery is also the one phase that can be silent for a long time on a large tree, so
+it emits throttled `scan.discovery_progress` events (DECISIONS.md D70) that the CLI and
+the web UI render as a live file counter.
 
 ## 6. Rules
 
