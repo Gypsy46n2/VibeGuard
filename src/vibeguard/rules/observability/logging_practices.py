@@ -11,10 +11,22 @@ from vibeguard.core.models import (
     Category,
     Confidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
+from vibeguard.rules._fixes import (
+    ensure_python_import,
+    finding_snippet,
+    insert_lines,
+    is_python,
+    line_at,
+    locate_line,
+    python_import_anchor,
+    replace_line,
+    whole_file_patch,
+)
 from vibeguard.rules._support import (
     JS_SUFFIXES,
     PY_SUFFIXES,
@@ -39,6 +51,45 @@ _PRINT_PY = re.compile(r"(?<![\w.])print\s*\(")
 _CONSOLE_JS = re.compile(r"(?<![\w.$])console\s*\.\s*(?:log|debug|info)\s*\(")
 _MAIN_GUARD = re.compile(r"^\s*if\s+__name__\s*==")
 _CLI_IMPORT = re.compile(r"(?m)^\s*(?:import|from)\s+(?:argparse|click|typer|fire|rich)\b")
+#: A whole ``print(...)`` statement on one line, with its indentation and arguments.
+_PRINT_STATEMENT = re.compile(r"(\s*)print\((.*)\)\s*")
+#: An existing module logger to reuse rather than declaring a second one.
+_EXISTING_LOGGER = re.compile(
+    r"(?m)^(\w+)\s*=\s*(?:logging|structlog)\.get_?[Ll]ogger\s*\("
+)
+
+
+def _existing_logger(text: str) -> str | None:
+    match = _EXISTING_LOGGER.search(text)
+    return match.group(1) if match else None
+
+
+def _single_simple_argument(args: str) -> bool:
+    """True when ``args`` is exactly one argument: no top-level comma, no kwargs."""
+    if not args.strip() or "**" in args:
+        return False
+    if re.search(r"\b(?:file|sep|end|flush)\s*=", args):
+        return False
+    depth = 0
+    quote = ""
+    for index, char in enumerate(args):
+        if quote:
+            if char == quote and args[index - 1] != "\\":
+                quote = ""
+            continue
+        if char in "\"'":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth < 0:
+                return False
+        elif char == "," and depth == 0:
+            return False
+    return depth == 0 and not quote
+
+
 _SCRIPT_DIRS = {"scripts", "script", "bin", "tools", "tool", "tasks", "hack", "notebooks"}
 _SCRIPT_NAMES = {"setup.py", "manage.py", "cli.py", "__main__.py", "main.py", "conftest.py"}
 
@@ -77,7 +128,6 @@ class PrintDiagnosticsRule(Rule):
     max_total: ClassVar[int] = 10
     max_per_file: ClassVar[int] = 3
 
-    # M3 fix(): replace with a module-level logger call.
     def detect(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         for rel in source_files(ctx, CODE_SUFFIXES):
@@ -127,6 +177,63 @@ class PrintDiagnosticsRule(Rule):
                     )
                 )
         return findings
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Turn one ``print(x)`` into ``logger.info(x)``, scaffolding the logger once.
+
+        Python only, and only for a single-argument ``print`` on one line: Python's
+        ``print(a, b)`` joins its arguments, while ``logger.info(a, b)`` treats the
+        rest as ``%``-format arguments, so a multi-argument call is *not* a
+        like-for-like rewrite. Calls with ``file=`` (already routed somewhere
+        deliberate), ``**kwargs``, or a name conflict on ``logger`` are left alone.
+        Script-shaped files and ``__main__`` blocks are already excluded by detection —
+        a CLI is supposed to write to stdout.
+        """
+        rel, line_no = finding.file, finding.line
+        if not rel or not line_no or not is_python(rel):
+            return None
+        text = ctx.read(rel)
+        target = locate_line(
+            text,
+            line_no,
+            matches=lambda candidate: bool(_PRINT_STATEMENT.fullmatch(candidate)),
+            snippet=finding_snippet(finding),
+        )
+        line = line_at(text, target)
+        if target is None or line is None:
+            return None
+        line_no = target
+        match = _PRINT_STATEMENT.fullmatch(line)
+        if match is None:  # pragma: no cover - guaranteed by locate_line
+            return None
+        indent, args = match.group(1), match.group(2)
+        if not _single_simple_argument(args):
+            return None
+        logger_name = _existing_logger(text)
+        if logger_name is None and re.search(r"(?m)^logger\s*=", text):
+            return None  # `logger` is already bound to something else
+        name = logger_name or "logger"
+        new_text = replace_line(text, line_no, f"{indent}{name}.info({args})")
+        if logger_name is None:
+            new_text = ensure_python_import(new_text, "import logging", "logging")
+            new_text = insert_lines(
+                new_text,
+                python_import_anchor(new_text),
+                ["", f"{name} = logging.getLogger(__name__)"],
+            )
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Log the diagnostic at {rel}:{line_no} through the module logger instead "
+                "of printing it."
+            ),
+            scope="observability",
+            summary="log diagnostics through the module logger",
+        )
 
     @staticmethod
     def _main_guard_line(text: str) -> int | None:

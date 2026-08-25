@@ -318,11 +318,15 @@ def test_every_rule_declares_valid_metadata() -> None:
         assert rule_cls.references
 
 
-def test_no_rule_overrides_fix() -> None:
+def test_only_the_slim_image_rule_repairs_itself() -> None:
+    """M3 gave VG-COST-003 a repair; the rest of the cost pack stays detect-only."""
     from vibeguard.core.rule import Rule
 
     for rule_cls in RULES:
-        assert rule_cls.fix is Rule.fix
+        if rule_cls.id == "VG-COST-003":
+            assert rule_cls.fix is not Rule.fix
+        else:
+            assert rule_cls.fix is Rule.fix
 
 
 def test_rules_never_raise_on_malformed_sources(tmp_path: Path) -> None:

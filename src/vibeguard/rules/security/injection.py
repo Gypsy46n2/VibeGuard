@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import re
+import shlex
 from typing import TYPE_CHECKING, ClassVar
 
 from vibeguard.core.models import (
@@ -10,10 +12,12 @@ from vibeguard.core.models import (
     Category,
     Confidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
+from vibeguard.rules._fixes import is_python, locate_call, replace_node, whole_file_patch
 from vibeguard.rules._support import (
     JS_SUFFIXES,
     PY_SUFFIXES,
@@ -44,6 +48,23 @@ _PY_SUBPROCESS = {"call", "run", "Popen", "check_output", "check_call", "getoutp
 _SHELL_TRUE = re.compile(r"shell\s*=\s*True")
 _JS_SHELL_TRUE = re.compile(r"shell\s*:\s*true")
 
+#: Characters that mean something to a shell; their presence makes an argument-list
+#: rewrite a behaviour change rather than a remediation.
+_SHELL_META = re.compile(r"[;&|><`$\\\n*?~()\[\]{}!#]")
+
+
+def _static_string(node: object, text: str) -> str | None:
+    """Decoded value of a plain string literal, or None when it is anything else."""
+    if getattr(node, "type", "") != "string":
+        return None
+    if text[:1] not in {'"', "'"}:  # f-strings, byte strings, raw strings
+        return None
+    try:
+        value = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        return None
+    return value if isinstance(value, str) else None
+
 
 class CommandInjectionRule(Rule):
     """A shell command line built from interpolated or request-derived text."""
@@ -72,7 +93,6 @@ class CommandInjectionRule(Rule):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.REVIEW_RECOMMENDED
 
-    # M3 fix(): shell=False with an argument list.
     def detect(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         for rel in source_files(ctx, PY_SUFFIXES):
@@ -106,6 +126,69 @@ class CommandInjectionRule(Rule):
                     continue
                 findings.append(self._finding(rel, call, node_text(source, arg)))
         return findings
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Replace a shell invocation with an argument list — only when provably safe.
+
+        The rewrite is offered exclusively for a ``subprocess.*`` call whose command is
+        a **static string literal** with no shell metacharacters: that command means
+        the same thing as an argument list, so ``shell=False`` cannot change behaviour.
+        Because this rule only fires on interpolated or request-derived commands, the
+        honest answer here is almost always ``None`` — splitting a command that is
+        assembled at runtime would silently change what runs, which is precisely the
+        failure mode the finding warns about.
+        """
+        rel, line_no = finding.file, finding.line
+        if not rel or not line_no or not is_python(rel):
+            return None
+        text = ctx.read(rel)
+        call = locate_call(
+            [
+                c
+                for c in py_calls(ctx, rel)
+                if c.base in _PY_SUBPROCESS
+                and "subprocess" in c.name
+                and _SHELL_TRUE.search(c.args)
+            ],
+            line_no,
+        )
+        if call is None:
+            return None
+        line_no = call.line
+        source = text.encode("utf-8")
+        args = arg_nodes(call.node)
+        args_node = call.node.child_by_field_name("arguments")
+        if not args or args_node is None:
+            return None
+        first_text = node_text(source, args[0])
+        command = _static_string(args[0], first_text)
+        if command is None or _SHELL_META.search(command):
+            return None
+        try:
+            parts = shlex.split(command)
+        except ValueError:
+            return None
+        if not parts:
+            return None
+        rendered = "[" + ", ".join(repr(part) for part in parts) + "]"
+        args_text = node_text(source, args_node)
+        new_args = _SHELL_TRUE.sub("shell=False", args_text.replace(first_text, rendered, 1))
+        new_text = replace_node(text, args_node, new_args)
+        if new_text is None:  # pragma: no cover - defensive
+            return None
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Run the static command at {rel}:{line_no} as an argument list with "
+                "`shell=False`, so no shell parses it."
+            ),
+            scope="security",
+            summary="run the command without a shell",
+        )
 
     def _py_uses_shell(self, call: CallSite) -> bool:
         if call.name in _PY_SHELL_DIRECT:

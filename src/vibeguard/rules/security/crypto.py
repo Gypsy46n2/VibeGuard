@@ -10,10 +10,20 @@ from vibeguard.core.models import (
     Category,
     Confidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
+from vibeguard.rules._fixes import (
+    ensure_python_import,
+    insert_lines,
+    is_python,
+    line_at,
+    locate_line,
+    replace_line,
+    whole_file_patch,
+)
 from vibeguard.rules._support import (
     JS_SUFFIXES,
     PY_SUFFIXES,
@@ -155,6 +165,25 @@ class WeakCryptographyRule(Rule):
 
 _RANDOM_FUNCS = {"random", "randint", "randrange", "choice", "choices", "sample", "shuffle",
                  "uniform", "getrandbits"}
+#: ``''.join(random.choice(ALPHABET) for _ in range(N))`` — the canonical hand-rolled
+#: token, rewritten wholesale to ``secrets.token_urlsafe(N)``.
+_PY_TOKEN_IDIOM = re.compile(
+    r"(['\"])\1\.join\(\s*random\.choice\([^()]*\)\s+for\s+\w+\s+in\s+range\(\s*(\d+)\s*\)\s*\)"
+)
+#: Any other ``random.<func>(`` call: ``SystemRandom`` keeps the exact semantics.
+_PY_RANDOM_CALL = re.compile(
+    r"(?<![\w.])random\.(random|randint|randrange|choice|choices|sample|shuffle|uniform|"
+    r"getrandbits)\("
+)
+_JS_TOKEN_IDIOM = re.compile(
+    r"Math\.random\(\)\s*\.toString\(\s*36\s*\)\s*\.(?:substring|substr|slice)"
+    r"\(\s*\d+\s*(?:,\s*\d+\s*)?\)"
+)
+_JS_CRYPTO_IMPORTED = re.compile(
+    r"require\(\s*['\"](?:node:)?crypto['\"]\s*\)|from\s+['\"](?:node:)?crypto['\"]"
+)
+_JS_ESM = re.compile(r"(?m)^\s*(?:import\s|export\s)")
+
 _SECURITY_NAMES = re.compile(
     r"token|secret|session|otp|nonce|password|passwd|api_?key|apikey|reset|csrf|uuid|salt|"
     r"verification|invite|voucher|coupon_code",
@@ -190,7 +219,6 @@ class UnsafeRandomnessRule(Rule):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.REVIEW_RECOMMENDED
 
-    # M3 fix(): secrets.token_urlsafe() / crypto.randomBytes().
     def detect(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         for suffixes, extractor in ((PY_SUFFIXES, py_calls), (JS_SUFFIXES, js_calls)):
@@ -225,6 +253,97 @@ class UnsafeRandomnessRule(Rule):
                         )
                     )
         return findings
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Swap the predictable generator for a cryptographic one.
+
+        Python, two provable shapes:
+
+        * the classic token idiom ``''.join(random.choice(ALPHABET) for _ in
+          range(N))`` becomes ``secrets.token_urlsafe(N)``;
+        * any other ``random.<func>(...)`` call becomes
+          ``secrets.SystemRandom().<func>(...)``, which has identical semantics and
+          return type — only the entropy source changes.
+
+        JavaScript: the ``Math.random().toString(36).slice(2)`` token idiom becomes
+        ``crypto.randomBytes(16).toString('hex')``. Anything else (a float used in a
+        calculation, a generator this rule cannot see the shape of) is reported only.
+        """
+        rel, line_no = finding.file, finding.line
+        if not rel or not line_no:
+            return None
+        text = ctx.read(rel)
+        target = locate_line(
+            text,
+            line_no,
+            matches=lambda candidate: bool(
+                _PY_RANDOM_CALL.search(candidate) or _JS_TOKEN_IDIOM.search(candidate)
+            ),
+            snippet="",
+        )
+        line = line_at(text, target)
+        if target is None or line is None:
+            return None
+        line_no = target
+        if is_python(rel):
+            return self._fix_python(finding, rel, text, line_no, line)
+        return self._fix_javascript(finding, rel, text, line_no, line)
+
+    def _fix_python(
+        self, finding: Finding, rel: str, text: str, line_no: int, line: str
+    ) -> Patch | None:
+        if "secrets." in line:
+            # Already partly migrated; rewriting again would nest the call.
+            return None
+        repaired = _PY_TOKEN_IDIOM.sub(r"secrets.token_urlsafe(\2)", line)
+        if repaired == line:
+            repaired = _PY_RANDOM_CALL.sub(r"secrets.SystemRandom().\1(", line)
+        if repaired == line:
+            return None
+        new_text = ensure_python_import(replace_line(text, line_no, repaired), "import secrets",
+                                        "secrets")
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Generate the security-sensitive value at {rel}:{line_no} with the "
+                "`secrets` module instead of `random`."
+            ),
+            scope="security",
+            summary="use a cryptographic random source for a security value",
+        )
+
+    def _fix_javascript(
+        self, finding: Finding, rel: str, text: str, line_no: int, line: str
+    ) -> Patch | None:
+        repaired = _JS_TOKEN_IDIOM.sub("crypto.randomBytes(16).toString('hex')", line)
+        if repaired == line:
+            return None
+        new_text = replace_line(text, line_no, repaired)
+        if not _JS_CRYPTO_IMPORTED.search(text):
+            statement = (
+                "import crypto from 'crypto';"
+                if _JS_ESM.search(text)
+                else "const crypto = require('crypto');"
+            )
+            first = text.splitlines()[0] if text.splitlines() else ""
+            anchor = 1 if first.startswith("#!") or "use strict" in first else 0
+            new_text = insert_lines(new_text, anchor, [statement])
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Generate the token at {rel}:{line_no} with `crypto.randomBytes` "
+                "instead of `Math.random()`."
+            ),
+            scope="security",
+            summary="use crypto.randomBytes for a security token",
+        )
 
     def _is_weak_rng(self, call: CallSite) -> bool:
         name = call.name

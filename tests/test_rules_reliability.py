@@ -58,8 +58,8 @@ def test_rule_metadata_is_well_formed():
         assert rule.topics and rule.topics <= known
         assert isinstance(rule.severity, Severity)
         assert isinstance(rule.confidence, Confidence)
-        # M3 owns repairs: no pack rule may override fix().
-        assert "fix" not in vars(rule)
+        # Only VG-REL-002 gained a repair in M3; the rest stay detect-only.
+        assert ("fix" in vars(rule)) == (rule.id == "VG-REL-002")
 
 
 def test_no_rule_fires_on_the_shared_clean_fixture(sample_ctx):

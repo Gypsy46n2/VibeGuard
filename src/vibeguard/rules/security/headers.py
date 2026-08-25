@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, ClassVar
 
 from vibeguard.core.models import (
@@ -10,11 +12,13 @@ from vibeguard.core.models import (
     Category,
     Confidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
-from vibeguard.rules._support import ProjectRule
+from vibeguard.rules._fixes import insert_lines, whole_file_patch
+from vibeguard.rules._support import ProjectRule, source_files
 from vibeguard.rules.security._taint import config_files
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -40,6 +44,31 @@ _HEADER_SIGNAL = re.compile(
     r"add_header\s+X-|Permissions-Policy|Referrer-Policy",
     re.IGNORECASE,
 )
+
+
+_JS_SUFFIXES = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+#: ``const app = express()`` — the anchor the helmet repair inserts after.
+_EXPRESS_APP = re.compile(r"(?m)^[ \t]*(?:const|let|var)\s+(\w+)\s*=\s*(express\(\))")
+_ESM = re.compile(r"(?m)^\s*(?:import\s|export\s)")
+
+
+def _package_dependencies(ctx: ScanContext) -> set[str]:
+    """Names in ``package.json`` dependencies / devDependencies (empty when absent)."""
+    text = ctx.read("package.json")
+    if not text:
+        return set()
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    names: set[str] = set()
+    for key in ("dependencies", "devDependencies"):
+        section = data.get(key)
+        if isinstance(section, dict):
+            names.update(str(name) for name in section)
+    return names
 
 
 class MissingSecurityHeadersRule(ProjectRule):
@@ -89,6 +118,11 @@ class MissingSecurityHeadersRule(ProjectRule):
             text = ctx.read(rel)
             if not text:
                 continue
+            # A dependency entry in package.json proves the library is installed, not
+            # that it is ever applied — "helmet in package.json, never called" is
+            # exactly the gap this rule exists to catch (and can repair).
+            if PurePosixPath(rel).name == "package.json":
+                continue
             if _HEADER_SIGNAL.search(text):
                 return None
             if not server and _SERVER_SIGNAL.search(text):
@@ -102,6 +136,56 @@ class MissingSecurityHeadersRule(ProjectRule):
             "searched for helmet, flask-talisman, Django SecurityMiddleware/SECURE_*, and "
             "literal Content-Security-Policy / X-Content-Type-Options / "
             "Strict-Transport-Security / X-Frame-Options headers",
+        )
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Wire up ``helmet`` — only when it is already a dependency of an Express app.
+
+        This is the one case where the right middleware is not a judgement call: the
+        project chose helmet, installed it, and then never called it. Everything else
+        this rule reports (flask-talisman, Django's ``SECURE_*`` settings, proxy
+        headers) is a policy decision with a CSP to tune, so it stays a recommendation.
+        """
+        deps = _package_dependencies(ctx)
+        if "helmet" not in deps:
+            return None
+        candidates = [
+            rel
+            for rel in source_files(ctx, _JS_SUFFIXES)
+            if _EXPRESS_APP.search(ctx.read(rel))
+        ]
+        if len(candidates) != 1:
+            return None
+        rel = candidates[0]
+        text = ctx.read(rel)
+        if "helmet" in text:
+            return None
+        match = _EXPRESS_APP.search(text)
+        if match is None:  # pragma: no cover - guarded by the filter above
+            return None
+        app = match.group(1)
+        lines = text.splitlines()
+        app_line = text[: match.start()].count("\n")
+        statement = (
+            "import helmet from 'helmet';"
+            if _ESM.search(text)
+            else "const helmet = require('helmet');"
+        )
+        new_text = insert_lines(text, app_line + 1, [f"{app}.use(helmet());"])
+        anchor = 1 if lines and (lines[0].startswith("#!") or "use strict" in lines[0]) else 0
+        new_text = insert_lines(new_text, anchor, [statement])
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Enable the helmet middleware in {rel}: it is already a dependency but is "
+                "never applied, so the app sets no security headers."
+            ),
+            scope="security",
+            summary="apply the helmet security-header middleware",
         )
 
 

@@ -10,10 +10,12 @@ from vibeguard.core.models import (
     Category,
     Confidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
+from vibeguard.rules._fixes import locate_call, replace_node, whole_file_patch
 from vibeguard.rules._support import (
     JS_SUFFIXES,
     PY_SUFFIXES,
@@ -47,6 +49,43 @@ _JS_QUALIFIED = ("sequelize.query", "knex.raw", "db.query", "pool.query", "conne
 
 _MAX = 8
 
+#: A parameterised rewrite is only possible when we know the driver's placeholder
+#: style; guessing would produce a query that fails at runtime.
+_PY_PLACEHOLDERS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?m)^\s*(?:import\s+sqlite3\b|from\s+sqlite3\b)"), "?"),
+    (
+        re.compile(
+            r"(?m)^\s*(?:import|from)\s+(?:psycopg2?|pymysql|MySQLdb|mysql\.connector)\b"
+        ),
+        "%s",
+    ),
+)
+_JS_PLACEHOLDERS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"""(?:require\(\s*['"]pg['"]|from\s+['"]pg['"])"""), "$1"),
+    (re.compile(r"""(?:require\(\s*['"]mysql2?['"]|from\s+['"]mysql2?['"])"""), "?"),
+)
+#: Only a bare name or dotted attribute is bound; an expression could have side
+#: effects or a different evaluation order once it moves into the parameter tuple.
+_SIMPLE_EXPR = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
+
+
+def _placeholder(text: str, table: tuple[tuple[re.Pattern[str], str], ...]) -> str | None:
+    for pattern, style in table:
+        if pattern.search(text):
+            return style
+    return None
+
+
+def _single_hole(body: str, hole: re.Pattern[str]) -> str | None:
+    """The one interpolated expression in ``body``, when there is exactly one and it
+    is a plain name."""
+    holes = hole.findall(body)
+    if len(holes) != 1:
+        return None
+    expr = holes[0].strip()
+    return expr if _SIMPLE_EXPR.fullmatch(expr) else None
+
+
 _WHY = (
     "An attacker who controls any part of the query text can rewrite the statement: "
     "read every row of every table, forge a login, or drop the database outright. SQL "
@@ -77,7 +116,6 @@ class SqlInjectionPythonRule(Rule):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.REVIEW_RECOMMENDED
 
-    # M3 fix(): rewrite to parameter binding.
     def detect(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         for rel in source_files(ctx, PY_SUFFIXES):
@@ -114,6 +152,75 @@ class SqlInjectionPythonRule(Rule):
                 )
         return findings
 
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Bind the interpolated value as a query parameter — simple cases only.
+
+        Every one of these must hold, or the finding is reported without a patch:
+        the file makes the driver (and therefore the placeholder style) obvious; the
+        reported line holds exactly one ``execute``-style call with a single argument;
+        that argument is an f-string with exactly one interpolation; and the
+        interpolated expression is a plain name or attribute. Anything else — two
+        holes, a computed expression, a query assembled across statements — is a
+        rewrite whose behaviour we cannot prove, so it stays a manual repair.
+        """
+        rel, line_no = finding.file, finding.line
+        if not rel or not line_no:
+            return None
+        text = ctx.read(rel)
+        placeholder = _placeholder(text, _PY_PLACEHOLDERS)
+        if placeholder is None:
+            return None
+        call = locate_call(
+            [c for c in py_calls(ctx, rel) if c.base in {"execute", "executemany"}], line_no
+        )
+        if call is None:
+            return None
+        line_no = call.line
+        args = arg_nodes(call.node)
+        args_node = call.node.child_by_field_name("arguments")
+        if len(args) != 1 or args_node is None:
+            return None
+        source = text.encode("utf-8")
+        rewritten = _rewrite_fstring(node_text(source, args[0]), placeholder)
+        if rewritten is None:
+            return None
+        sql, expr = rewritten
+        new_text = replace_node(text, args_node, f"({sql}, ({expr},))")
+        if new_text is None:  # pragma: no cover - defensive
+            return None
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Parameterise the query at {rel}:{line_no}: the SQL text becomes a "
+                f"constant and `{expr}` is bound as a value."
+            ),
+            scope="security",
+            summary="parameterise the SQL query",
+        )
+
+
+def _rewrite_fstring(raw: str, placeholder: str) -> tuple[str, str] | None:
+    """``f"… {x} …"`` → ``("… ? …", "x")``; None when the shape is not provable."""
+    match = re.fullmatch(r"[fF](['\"])(.*)\1", raw, re.S)
+    if match is None:
+        return None
+    quote, body = match.group(1), match.group(2)
+    if "{{" in body or "}}" in body:
+        return None
+    expr = _single_hole(body, re.compile(r"\{([^{}]*)\}"))
+    if expr is None:
+        return None
+    # Any quotes wrapped around the interpolation go too: a bound parameter is not
+    # quoted in the SQL text.
+    new_body = re.sub(r"['\"]?\{[^{}]*\}['\"]?", placeholder, body)
+    if quote in new_body:
+        return None
+    return f"{quote}{new_body}{quote}", expr
+
 
 def _js_arg_is_interpolated(source: bytes, call_node: Any) -> Any | None:
     """First argument of a JS call when it is interpolated, else None."""
@@ -146,7 +253,6 @@ class SqlInjectionJavaScriptRule(Rule):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.REVIEW_RECOMMENDED
 
-    # M3 fix(): rewrite to a placeholder query with a values array.
     def detect(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         for rel in source_files(ctx, JS_SUFFIXES):
@@ -183,3 +289,73 @@ class SqlInjectionJavaScriptRule(Rule):
                     )
                 )
         return findings
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Move the interpolated value into the driver's values array.
+
+        Same conservatism as the Python rule: the driver must be identifiable (``pg``
+        → ``$1``, ``mysql``/``mysql2`` → ``?``), the call must take exactly one
+        template-literal argument, and that literal must contain exactly one
+        ``${name}``. Concatenated strings and multi-hole templates are reported only.
+        """
+        rel, line_no = finding.file, finding.line
+        if not rel or not line_no:
+            return None
+        text = ctx.read(rel)
+        placeholder = _placeholder(text, _JS_PLACEHOLDERS)
+        if placeholder is None:
+            return None
+        call = locate_call(
+            [
+                c
+                for c in js_calls(ctx, rel)
+                if c.base in _JS_CALLEES or c.name.endswith(_JS_QUALIFIED)
+            ],
+            line_no,
+        )
+        if call is None:
+            return None
+        line_no = call.line
+        args = arg_nodes(call.node)
+        args_node = call.node.child_by_field_name("arguments")
+        if len(args) != 1 or args_node is None:
+            return None
+        source = text.encode("utf-8")
+        rewritten = _rewrite_template(node_text(source, args[0]), placeholder)
+        if rewritten is None:
+            return None
+        sql, expr = rewritten
+        new_text = replace_node(text, args_node, f"({sql}, [{expr}])")
+        if new_text is None:  # pragma: no cover - defensive
+            return None
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Parameterise the query at {rel}:{line_no}: the SQL text becomes a "
+                f"constant and `{expr}` moves into the values array."
+            ),
+            scope="security",
+            summary="parameterise the SQL query",
+        )
+
+
+def _rewrite_template(raw: str, placeholder: str) -> tuple[str, str] | None:
+    """`` `… ${x} …` `` → ``("'… ? …'", "x")``; None when the shape is not provable."""
+    match = re.fullmatch(r"`(.*)`", raw, re.S)
+    if match is None:
+        return None
+    body = match.group(1)
+    expr = _single_hole(body, re.compile(r"\$\{([^{}]*)\}"))
+    if expr is None:
+        return None
+    new_body = re.sub(r"['\"]?\$\{[^{}]*\}['\"]?", placeholder, body)
+    if "`" in new_body or "\n" in new_body:
+        return None
+    quote = "'" if "'" not in new_body else ('"' if '"' not in new_body else "")
+    if not quote:
+        return None
+    return f"{quote}{new_body}{quote}", expr

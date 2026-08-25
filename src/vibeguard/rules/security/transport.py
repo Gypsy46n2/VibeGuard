@@ -10,10 +10,18 @@ from vibeguard.core.models import (
     Category,
     Confidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
+from vibeguard.rules._fixes import (
+    finding_snippet,
+    line_at,
+    locate_line,
+    replace_line,
+    whole_file_patch,
+)
 from vibeguard.rules.security._taint import config_files
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -135,6 +143,10 @@ _TLS_PATTERNS = (
     re.compile(r"\bstrictSSL\s*:\s*false"),
 )
 
+#: The two forms VG-SEC-018 can repair without also changing trust configuration.
+_VERIFY_FALSE = re.compile(r"(\bverify\s*=\s*)False\b")
+_REJECT_UNAUTHORIZED_FALSE = re.compile(r"(\brejectUnauthorized\s*:\s*)false\b")
+
 
 class TlsVerificationDisabledRule(Rule):
     """Certificate validation switched off on an outbound TLS connection."""
@@ -169,7 +181,6 @@ class TlsVerificationDisabledRule(Rule):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.REVIEW_RECOMMENDED
 
-    # M3 fix(): drop the flag and install the correct CA bundle.
     def detect(self, ctx: ScanContext) -> list[Finding]:
         return [
             self.make_finding(
@@ -189,3 +200,46 @@ class TlsVerificationDisabledRule(Rule):
             )
             for rel, line_no, text in _scan(ctx, _TLS_PATTERNS)
         ]
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Turn verification back on where that is a one-token, local change.
+
+        Only ``verify=False`` (Python requests/httpx) and ``rejectUnauthorized: false``
+        (Node TLS options) are rewritten: both mean exactly "check the certificate"
+        when flipped, and nothing else on the line moves. The other forms this rule
+        detects — ``CERT_NONE``, ``curl -k``, ``InsecureSkipVerify``,
+        ``NODE_TLS_REJECT_UNAUTHORIZED=0`` — need a CA bundle or a server-side
+        certificate fix to accompany them, so they are reported, not patched.
+        """
+        rel, line_no = finding.file, finding.line
+        if not rel or not line_no:
+            return None
+        text = ctx.read(rel)
+        target = locate_line(
+            text,
+            line_no,
+            matches=lambda candidate: bool(
+                _VERIFY_FALSE.search(candidate) or _REJECT_UNAUTHORIZED_FALSE.search(candidate)
+            ),
+            snippet=finding_snippet(finding),
+        )
+        line = line_at(text, target)
+        if target is None or line is None:
+            return None
+        line_no = target
+        repaired = _VERIFY_FALSE.sub(r"\1True", line)
+        repaired = _REJECT_UNAUTHORIZED_FALSE.sub(r"\1true", repaired)
+        if repaired == line:
+            return None
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            replace_line(text, line_no, repaired),
+            description=(
+                f"Re-enable TLS certificate verification at {rel}:{line_no}."
+            ),
+            scope="security",
+            summary="re-enable TLS certificate verification",
+        )

@@ -15,10 +15,12 @@ from vibeguard.core.models import (
     Category,
     Confidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
+from vibeguard.rules._fixes import locate_line, whole_file_patch
 from vibeguard.rules._support import (
     JS_SUFFIXES,
     PY_SUFFIXES,
@@ -188,6 +190,8 @@ _JS_OPENERS = {
     "createreadstream",
     "createwritestream",
 }
+#: ``fh = open(...)`` on a single line — the only shape VG-REL-002 repairs.
+_OPEN_ASSIGNMENT = re.compile(r"(\s*)([A-Za-z_]\w*)\s*=\s*(open\(.*\))\s*")
 _RELEASE = re.compile(r"\.close\s*\(|\.destroy\s*\(|\.release\s*\(|\.dispose\s*\(|closing\s*\(")
 _WITHISH = {"with_statement", "with_clause", "with_item", "as_pattern", "resource"}
 
@@ -243,7 +247,6 @@ class UnreleasedResourceRule(Rule):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.REVIEW_RECOMMENDED
 
-    # M3 fix(): wrap the opener in a with-statement / try…finally that closes the handle.
     def detect(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         for rel in source_files(ctx, CODE_SUFFIXES):
@@ -287,6 +290,79 @@ class UnreleasedResourceRule(Rule):
                     )
                 )
         return findings
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Wrap ``f = open(...)`` in a ``with`` statement — single-use case only.
+
+        The pattern this repairs is the one that actually appears in vibe-coded apps::
+
+            data = None
+            fh = open(path)
+            data = fh.read()
+
+        It requires: a builtin ``open(...)`` assigned to a name on one line, exactly one
+        following statement at the same indentation that uses the name, and no other
+        use of that name anywhere later in the file. Under those conditions the
+        with-block covers exactly the same statements, so the rewrite cannot change
+        control flow. Anything longer needs re-indenting a block whose extent this rule
+        cannot prove, and is left to a human.
+        """
+        rel, line_no = finding.file, finding.line
+        if not rel or not line_no or PurePosixPath(rel).suffix.lower() != ".py":
+            return None
+        text = ctx.read(rel)
+        target = locate_line(
+            text,
+            line_no,
+            matches=lambda candidate: bool(_OPEN_ASSIGNMENT.fullmatch(candidate)),
+        )
+        if target is None:
+            return None
+        line_no = target
+        lines = text.splitlines()
+        match = _OPEN_ASSIGNMENT.fullmatch(lines[line_no - 1])
+        if match is None:  # pragma: no cover - guaranteed by locate_line
+            return None
+        indent, var, call = match.group(1), match.group(2), match.group(3)
+        if call.count("(") != call.count(")"):
+            return None
+
+        follow = line_no  # 0-based index of the next line
+        while follow < len(lines) and not lines[follow].strip():
+            follow += 1
+        if follow >= len(lines):
+            return None
+        user = lines[follow]
+        used = re.compile(rf"\b{re.escape(var)}\b")
+        if (
+            user[: len(indent) + 1] != indent + user.strip()[:1]
+            or not used.search(user)
+            or user.rstrip().endswith(":")
+            or user.strip().startswith(("with ", "for ", "while ", "if ", "try", "@"))
+        ):
+            return None
+        if any(used.search(rest) for rest in lines[follow + 1 :]):
+            return None
+
+        rebuilt = (
+            lines[: line_no - 1]
+            + [f"{indent}with {call} as {var}:", f"{indent}    {user.strip()}"]
+            + lines[follow + 1 :]
+        )
+        new_text = "\n".join(rebuilt) + ("\n" if text.endswith("\n") else "")
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Wrap the handle opened at {rel}:{line_no} in a `with` statement so it is "
+                "closed even when the body raises."
+            ),
+            scope="reliability",
+            summary="close the file handle with a context manager",
+        )
 
     @staticmethod
     def _opener_kind(lowered: str) -> str | None:

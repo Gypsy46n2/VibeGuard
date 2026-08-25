@@ -11,10 +11,12 @@ from vibeguard.core.models import (
     Confidence,
     Evidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
+from vibeguard.rules._fixes import whole_file_patch
 from vibeguard.rules.containers._parse import (
     Instruction,
     dockerfiles,
@@ -62,7 +64,6 @@ class ContainerRunsAsRootRule(Rule):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.REVIEW_RECOMMENDED
 
-    # M3 fix(): add a non-root USER and chown the app directory.
     def detect(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         for rel in dockerfiles(ctx):
@@ -94,6 +95,68 @@ class ContainerRunsAsRootRule(Rule):
                 )
             )
         return findings
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Create an unprivileged user in the final stage and switch to it.
+
+        Appended at the end of the stage on purpose: the last ``USER`` instruction in a
+        stage decides the runtime user regardless of where ``CMD`` sits, so nothing
+        that already exists has to move. Only Debian- and Alpine-family bases are
+        handled, because the ``adduser`` invocation differs per distribution and a
+        wrong one breaks the build. ``USER root`` is left alone — replacing it needs a
+        target user we would have to invent.
+        """
+        rel = finding.file
+        if not rel:
+            return None
+        text = ctx.read(rel)
+        instructions = parse_dockerfile(text)
+        stage = final_stage(instructions)
+        if not stage or any(ins.upper == "USER" for ins in stage):
+            return None
+        if _APP_USER in text:
+            return None
+        ref = image_ref(stage[0].value)
+        if ref is None:
+            return None
+        create = _adduser_command(ref.image, ref.tag)
+        if create is None:
+            return None
+        body = text.rstrip("\n")
+        new_text = (
+            f"{body}\n\n# vibeguard: run the container process as an unprivileged user\n"
+            f"{create}\nUSER {_APP_USER}\n"
+        )
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Create the unprivileged user `{_APP_USER}` in the final stage of {rel} "
+                "and switch to it."
+            ),
+            scope="containers",
+            summary="run the container as a non-root user",
+        )
+
+
+#: Name of the user the VG-CTR-001 repair creates.
+_APP_USER = "appuser"
+_DEBIAN_BASES = {"python", "node", "ruby", "golang", "openjdk", "debian", "ubuntu"}
+_DEBIAN_TAGS = ("slim", "bookworm", "bullseye", "trixie", "jammy", "noble", "focal")
+
+
+def _adduser_command(image: str, tag: str) -> str | None:
+    """The distribution-correct user creation command, or None when unknown."""
+    base = image.rsplit("/", 1)[-1].lower()
+    lowered = tag.lower()
+    if base == "alpine" or "alpine" in lowered:
+        return f"RUN addgroup -S {_APP_USER} && adduser -S -G {_APP_USER} {_APP_USER}"
+    if base in _DEBIAN_BASES or any(marker in lowered for marker in _DEBIAN_TAGS):
+        return f"RUN adduser --system --no-create-home --group {_APP_USER}"
+    return None
 
 
 class UnpinnedBaseImageRule(Rule):

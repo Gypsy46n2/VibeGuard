@@ -10,15 +10,24 @@ from vibeguard.core.models import (
     Category,
     Confidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
+from vibeguard.rules._fixes import (
+    append_arguments,
+    locate_call,
+    replace_node,
+    whole_file_patch,
+)
 from vibeguard.rules._support import (
     JS_SUFFIXES,
     PY_SUFFIXES,
+    CallSite,
     block_of,
     js_calls,
+    node_text,
     py_calls,
     source_files,
 )
@@ -29,6 +38,10 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = ["HttpTimeoutJsRule", "HttpTimeoutPythonRule"]
 
 _MAX_FINDINGS = 10
+
+#: Seconds used by the VG-API-001 repair — long enough for a slow-but-alive upstream,
+#: short enough that a hung one cannot pin a worker indefinitely.
+_DEFAULT_TIMEOUT = 30
 
 _HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options", "request")
 
@@ -91,7 +104,6 @@ class HttpTimeoutPythonRule(Rule):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.SAFE_AUTOFIX
 
-    # M3 fix(): add timeout=(connect, read).
     def detect(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         for rel in source_files(ctx, PY_SUFFIXES):
@@ -137,6 +149,63 @@ class HttpTimeoutPythonRule(Rule):
                     )
                 )
         return findings
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """Add ``timeout=30`` to the reported call.
+
+        Preconditions (all required, else no patch): the finding's line still holds
+        exactly one matching call, its argument list is a plain parenthesised list with
+        no ``**kwargs`` (which could already carry a timeout), and no ``timeout=`` is
+        present. Only the argument list is rewritten — nothing else in the file moves.
+        """
+        rel, line_no = finding.file, finding.line
+        if not rel or not line_no:
+            return None
+        text = ctx.read(rel)
+        if not text:
+            return None
+        call = locate_call([c for c in py_calls(ctx, rel) if self._is_target(c)], line_no)
+        if call is None:
+            return None
+        line_no = call.line
+        source = text.encode("utf-8")
+        args_node = call.node.child_by_field_name("arguments")
+        if args_node is None:
+            return None
+        args_text = node_text(source, args_node)
+        if not (args_text.startswith("(") and args_text.endswith(")")):
+            return None
+        if "**" in args_text or "*" in args_text.replace("**", ""):
+            return None
+        new_args = append_arguments(args_text, [f"timeout={_DEFAULT_TIMEOUT}"])
+        if new_args is None:
+            return None
+        new_text = replace_node(text, args_node, new_args)
+        if new_text is None:  # pragma: no cover - defensive
+            return None
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            new_text,
+            description=(
+                f"Add `timeout={_DEFAULT_TIMEOUT}` to `{call.name}(...)` at {rel}:{line_no} "
+                "so the call cannot block forever."
+            ),
+            scope="api",
+            summary=f"bound {call.name}() with an explicit timeout",
+        )
+
+    @staticmethod
+    def _is_target(call: CallSite) -> bool:
+        if _TIMEOUT_KW.search(call.args):
+            return False
+        return bool(
+            _PY_MODULE_CALL.match(call.name)
+            or _PY_URLOPEN.search(call.name)
+            or _PY_CLIENT_CALL.match(call.name)
+        )
 
 
 class HttpTimeoutJsRule(Rule):

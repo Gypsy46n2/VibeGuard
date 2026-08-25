@@ -11,10 +11,18 @@ from vibeguard.core.models import (
     Category,
     Confidence,
     Finding,
+    Patch,
     ScaleClass,
     Severity,
 )
 from vibeguard.core.rule import Rule
+from vibeguard.rules._fixes import (
+    finding_snippet,
+    line_at,
+    locate_line,
+    replace_line,
+    whole_file_patch,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
@@ -93,8 +101,6 @@ class OversizedBaseImageRule(Rule):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.REVIEW_RECOMMENDED
 
-    # M3 fix(): rewrite `FROM python:3.12` to `FROM python:3.12-slim` when no
-    # fat-image workload marker is present in the Dockerfile.
     def detect(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
         for rel in _dockerfiles(ctx):
@@ -152,6 +158,78 @@ class OversizedBaseImageRule(Rule):
                 ),
             )
         ]
+
+
+    # ------------------------------------------------------------------- repair
+    def fix(self, ctx: ScanContext, finding: Finding) -> Patch | None:
+        """``FROM python:3.12`` → ``FROM python:3.12-slim`` when nothing needs the fat base.
+
+        Refused — deliberately — whenever the project shows any sign of building
+        compiled dependencies: a package that has no manylibc wheel, an ``apt-get
+        install``/``gcc`` line in the Dockerfile, or one of the workload markers the
+        detector already screens for. Slimming an image that needs a compiler turns a
+        working build into a broken one, so the patch only lands on the plain case.
+        """
+        rel, line_no = finding.file, finding.line
+        if not rel or not line_no:
+            return None
+        text = ctx.read(rel)
+        target = locate_line(
+            text,
+            line_no,
+            matches=lambda candidate: bool(_FROM_RE.match(candidate)),
+            snippet=finding_snippet(finding),
+        )
+        line = line_at(text, target)
+        if target is None or line is None:
+            return None
+        line_no = target
+        match = _FROM_RE.match(line)
+        if match is None:
+            return None
+        image = match.group(1)
+        if not _SLIMMABLE.match(image) or _SLIM.search(image):
+            return None
+        if _BUILD_TOOLING.search(text) or _NEEDS_FAT.search(text):
+            return None
+        if _compiled_dependency(ctx):
+            return None
+        repaired = line.replace(image, f"{image}-slim", 1)
+        return whole_file_patch(
+            finding,
+            rel,
+            text,
+            replace_line(text, line_no, repaired),
+            description=(
+                f"Build {rel} on `{image}-slim` instead of `{image}`; no compiled "
+                "dependency or build tooling in this project needs the full image."
+            ),
+            scope="cost",
+            summary=f"use the -slim variant of {image}",
+        )
+
+
+#: Only tagged CPython images are slimmed: `python:3.12` has a `-slim` variant with the
+#: same interpreter, which is not true of every base image family.
+_SLIMMABLE = re.compile(r"^(?:docker\.io/)?(?:library/)?python:\d[\w.]*$", re.IGNORECASE)
+
+#: Packages that build from source on a slim image unless a wheel happens to exist.
+_COMPILED_DEPENDENCIES = re.compile(
+    r"(?m)^\s*(psycopg2(?!-binary)|mysqlclient|pyodbc|cx[-_]Oracle|python-ldap|pycurl|"
+    r"uwsgi|pyicu|python-snappy|confluent-kafka|grpcio|pygraphviz|shapely|cartopy|"
+    r"pyaudio|dbus-python|systemd-python)\b",
+    re.IGNORECASE,
+)
+_REQUIREMENT_FILES = ("requirements.txt", "requirements/base.txt", "pyproject.toml",
+                      "Pipfile", "setup.py")
+
+
+def _compiled_dependency(ctx: ScanContext) -> bool:
+    """True when a manifest names a package that typically needs a compiler."""
+    for name in _REQUIREMENT_FILES:
+        if ctx.exists(name) and _COMPILED_DEPENDENCIES.search(ctx.read(name)):
+            return True
+    return False
 
 
 RULES: list[type[Rule]] = [OversizedBaseImageRule]

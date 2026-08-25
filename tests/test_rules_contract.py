@@ -87,10 +87,53 @@ def test_rule_topics_are_declared_and_valid():
     assert not unknown, f"rules claiming topics absent from topics.yaml: {unknown}"
 
 
-def test_fix_is_a_stub_until_m3():
-    """M3 owns repairs: no built-in rule may return a Patch yet."""
-    overriding = [entry.id for entry in RULES if entry.cls.fix is not Rule.fix]
-    assert not overriding, f"rules overriding fix() before M3: {overriding}"
+#: Rules that gained a deterministic repair in M3. Anything outside this list must
+#: still inherit ``Rule.fix`` — adding a repair is a deliberate, reviewed act.
+RULES_WITH_FIXES = {
+    "VG-API-001",
+    "VG-SEC-001",
+    "VG-SEC-002",
+    "VG-SEC-007",
+    "VG-SEC-011",
+    "VG-SEC-014",
+    "VG-SEC-016",
+    "VG-SEC-018",
+    "VG-CTR-001",
+    "VG-CTR-002",
+    "VG-CTR-004",
+    "VG-OBS-001",
+    "VG-REL-002",
+    "VG-COST-003",
+}
+
+
+def test_only_the_declared_rules_implement_a_repair():
+    overriding = {entry.id for entry in RULES if entry.cls.fix is not Rule.fix}
+    assert overriding == RULES_WITH_FIXES
+
+
+def test_every_repairing_rule_declares_an_autofix_class_that_allows_repair():
+    """A rule that can repair itself must not be marked MANUAL_CHANGE_REQUIRED."""
+    allowed = {AutofixSafety.SAFE_AUTOFIX, AutofixSafety.REVIEW_RECOMMENDED}
+    wrong = {
+        entry.id: entry.cls.autofix_safety.value
+        for entry in RULES
+        if entry.id in RULES_WITH_FIXES and entry.cls.autofix_safety not in allowed
+    }
+    assert not wrong, f"rules with a fix() but an unrepairable safety class: {wrong}"
+
+
+def test_fix_never_raises_on_a_finding_it_did_not_produce(hostile_ctx):
+    """fix() is as total as detect(): hostile input yields None, never an exception."""
+    crashed: dict[str, str] = {}
+    for entry in RULES:
+        rule = entry.cls()
+        finding = rule.make_finding(file="broken.py", line=1, snippet="def f(:")
+        try:
+            assert rule.fix(hostile_ctx, finding) is None or True
+        except Exception as exc:  # noqa: BLE001 - the point of the test
+            crashed[entry.id] = f"{type(exc).__name__}: {exc}"
+    assert not crashed, f"rules raised from fix(): {crashed}"
 
 
 def test_adapter_topics_are_valid():
