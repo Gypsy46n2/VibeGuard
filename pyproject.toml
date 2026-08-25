@@ -1,0 +1,81 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vibeguard"
+version = "0.1.0"
+description = "Audit, repair, and harden vibe-coded applications toward production grade."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "VibeGuard contributors" }]
+keywords = ["security", "audit", "static-analysis", "hardening", "vibe-coding"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2",
+    "rich>=13",
+    "pyyaml>=6",
+    "tomli-w>=1.0",
+    "tree-sitter>=0.21",
+    "tree-sitter-python>=0.21",
+    "tree-sitter-javascript>=0.21",
+]
+
+[project.optional-dependencies]
+scanners = [
+    "bandit",
+    "detect-secrets",
+    "pip-audit",
+    "checkov",
+    "semgrep",
+]
+ai = [
+    "anthropic",
+    "httpx",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+vibeguard = "vibeguard.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/vibeguard/vibeguard"
+
+# Third-party rule packs register themselves under this entry-point group; the
+# registry (vibeguard.core.registry) discovers them at runtime:
+#
+#   [project.entry-points."vibeguard.rules"]
+#   mypack = "mypack.rules:RULES"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vibeguard"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+# B008: typer declares defaults via function calls.
+# UP042: INTERFACES.md mandates `class X(str, Enum)`; StrEnum is not the contract.
+ignore = ["B008", "UP042"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["vibeguard"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
