@@ -19,6 +19,12 @@ vibeguard-report.md
 vibeguard-report.html
 .vibeguard/
 
+# ...except the ones examples/repaired-app deliberately ships: that report and
+# those repro tests are the evidence behind its README's claims.
+!examples/repaired-app/vibeguard-report.json
+!examples/repaired-app/vibeguard-report.md
+!examples/repaired-app/.vibeguard/
+
 # Editors / OS
 .idea/
 .vscode/

@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head><title>NoteNest</title></head>
+  <body>
+    <h1>Your notes</h1>
+    <ul>
+      {% for item in notes %}
+        <li>
+          <strong>{{ item.note.title | safe }}</strong>
+          <div>{{ item.note.body | safe }}</div>
+          <span>by {{ item.author }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+    <script>
+      // Renders whatever the server put in the page, straight into the DOM.
+      document.getElementById("flash").innerHTML = new URLSearchParams(
+        window.location.search
+      ).get("msg");
+    </script>
+  </body>
+</html>

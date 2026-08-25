@@ -72,6 +72,10 @@ include = ["src/vibeguard", "tests", "docs", "README.md", "pyproject.toml"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# `examples/` is deliberately broken code plus machine-generated repro tests. Linting
+# it would be linting the test data — and "fixing" it would delete the findings the
+# integration test asserts on.
+extend-exclude = ["examples"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]
