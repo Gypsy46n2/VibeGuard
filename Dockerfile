@@ -6,7 +6,9 @@
 #   docker build -t vibeguard .
 #   docker run --rm -v "$PWD":/repo vibeguard audit /repo
 #
-# Mount read-only for an audit; `fix` needs write access and a git worktree.
+# The mount must be writable even for an audit: vibeguard-report.json is canonical
+# and is written into the directory that was scanned. `fix` additionally needs a git
+# worktree it can branch and commit on.
 
 FROM python:3.12-slim AS build
 

@@ -176,8 +176,21 @@ def _write_report(report: ScanReport, root: Path) -> Path:
 
 
 def _emit(report: ScanReport, root: Path, outputs: set[str], events: EventBus) -> list[Path]:
-    """Write every requested report file plus the canonical JSON; print the paths."""
-    paths = write_reports(report, root, outputs, events=events)
+    """Write every requested report file plus the canonical JSON; print the paths.
+
+    A scan that cannot record its result is an execution error, not a silent partial
+    success — a read-only mount is the usual cause, and a stack trace is a poor way to
+    say so.
+    """
+    try:
+        paths = write_reports(report, root, outputs, events=events)
+    except OSError as exc:
+        err_console.print(
+            f"[red]error:[/] the scan finished but its report could not be written to "
+            f"{root}: {exc}. VibeGuard writes vibeguard-report.json into the directory "
+            "it scanned, so that directory must be writable."
+        )
+        raise typer.Exit(EXIT_ERROR) from exc
     for path in paths:
         console.print(f"report written to [bold]{path}[/]")
     return paths
