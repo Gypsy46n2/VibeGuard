@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vibeguard"
-version = "0.2.0"
+version = "0.3.0"
 description = "Audit, repair, and harden vibe-coded applications toward production grade."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,9 +42,19 @@ ai = [
     "anthropic",
     "httpx",
 ]
+# The local web UI (`vibeguard ui`). Optional on purpose: the CLI and the library
+# never import these, so a plain install stays dependency-light.
+ui = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.5",
+    # The UI tests drive the app through fastapi's TestClient, which is httpx-based.
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "httpx>=0.27",
 ]
 
 [project.scripts]
@@ -65,7 +75,13 @@ Issues = "https://github.com/Gypsy46n2/VibeGuard/issues"
 packages = ["src/vibeguard"]
 # topics.yaml is the authoritative checklist registry (INTERFACES.md §11) and must
 # ship inside the wheel; the engine reads it via importlib.resources.
-artifacts = ["src/vibeguard/rules/topics.yaml"]
+# The single-file UI front end and the mascot ship inside the wheel too; the server
+# reads them straight out of the installed package.
+artifacts = [
+    "src/vibeguard/rules/topics.yaml",
+    "src/vibeguard/ui/index.html",
+    "src/vibeguard/ui/assets/*.png",
+]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/vibeguard", "tests", "docs", "README.md", "LICENSE", "pyproject.toml"]

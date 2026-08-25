@@ -1,7 +1,7 @@
 {
   "$comment": "Agent-plugin manifest — ARCHITECTURE.md §10.3. A host that can run a subprocess and read JSON lines can drive VibeGuard from this file alone.",
   "name": "vibeguard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Audit, repair, and harden vibe-coded applications toward production grade.",
   "homepage": "https://github.com/Gypsy46n2/VibeGuard",
   "license": "Apache-2.0",

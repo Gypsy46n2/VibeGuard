@@ -953,6 +953,65 @@ def baseline_show(
 
 
 @app.command()
+def ui(
+    path: Annotated[Path, typer.Argument(help="Directory to open in the picker.")] = Path("."),
+    port: Annotated[int, typer.Option("--port", help="Port on 127.0.0.1 to serve on.")] = 8321,
+    no_browser: Annotated[
+        bool, typer.Option("--no-browser", help="Do not open a browser window.")
+    ] = False,
+) -> None:
+    """Serve the local web UI on 127.0.0.1 and open it in your browser.
+
+    The UI is a front end for the same engine the CLI drives — same rules, same report.
+    It binds the loopback interface only: it has no authentication because it is not
+    reachable from another machine (DECISIONS.md D61).
+
+    ``PATH`` seeds the folder picker. The server may browse and scan your home
+    directory plus ``PATH``, and refuses everything else.
+    """
+    from vibeguard.ui import UI_EXTRA_HINT, missing_dependency
+
+    missing = missing_dependency()
+    if missing is not None:
+        # Escaped: rich would read "[ui]" as a style tag and swallow the extra's name,
+        # leaving a hint that installs the wrong thing.
+        hint = UI_EXTRA_HINT.replace("[", r"\[")
+        err_console.print(
+            f"[red]error:[/] the web UI needs [bold]{missing}[/], which is not installed.\n"
+            f"       install it with: [bold]{hint}[/]"
+        )
+        raise typer.Exit(EXIT_ERROR)
+
+    from vibeguard.ui.server import HOST, serve
+
+    root = path.resolve()
+    if not root.is_dir():
+        err_console.print(f"[red]error:[/] not a directory: {root}")
+        raise typer.Exit(EXIT_ERROR)
+
+    console.print(
+        f"VibeGuard UI on [bold]http://{HOST}:{port}/[/] — starting in {root}\n"
+        "[dim]loopback only; press Ctrl-C to stop.[/]"
+    )
+    try:
+        serve(
+            roots=[Path.home(), root],
+            initial_path=root,
+            port=port,
+            open_browser=not no_browser,
+        )
+    except OSError as exc:
+        err_console.print(
+            f"[red]error:[/] could not serve on {HOST}:{port}: {exc}. "
+            "Another process may already hold that port — try [bold]--port[/]."
+        )
+        raise typer.Exit(EXIT_ERROR) from exc
+    except KeyboardInterrupt:  # pragma: no cover - interactive
+        console.print("\nstopped.")
+    raise typer.Exit(EXIT_OK)
+
+
+@app.command()
 def doctor() -> None:
     """Report environment, git, and external adapter availability."""
     table = Table(title="vibeguard doctor")

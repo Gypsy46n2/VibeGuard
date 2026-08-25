@@ -1,0 +1,1384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VibeGuard</title>
+<!--
+  One file, no build step, no network. Everything this page needs is inline: no CDN,
+  no webfont, no external stylesheet, no analytics. The only requests it makes are to
+  its own origin (127.0.0.1) — the same self-containment bar the HTML report is held
+  to, for the same reason: a security tool that phones home is not one.
+
+  Report data is written into the DOM with textContent and createElement, never with
+  innerHTML. Findings carry attacker-influenced code snippets, file names and rule
+  output; the one thing injected as markup is the SVG our own renderer produced.
+-->
+<style>
+  :root {
+    --bg: #16171c;
+    --sidebar: #0d0e11;
+    --card: #1c1e24;
+    --card-2: #23262e;
+    --line: #2c3039;
+    --line-soft: #24272f;
+    --ink: #ececf1;
+    --muted: #9aa3b0;
+    --faint: #6d7683;
+    --accent: #3b82f6;
+    --accent-strong: #2f6fe0;
+    --accent-soft: rgba(59, 130, 246, 0.14);
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --radius: 14px;
+    --radius-sm: 9px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; }
+  a { color: var(--accent); }
+  .hidden { display: none !important; }
+
+  /* ------------------------------------------------------------- app shell */
+  .app { display: grid; grid-template-columns: 268px 1fr; height: 100vh; }
+  .sidebar {
+    background: var(--sidebar);
+    border-right: 1px solid var(--line-soft);
+    display: flex; flex-direction: column;
+    padding: 14px 12px;
+    gap: 12px; min-height: 0;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 6px 2px; }
+  .brand img { width: 34px; height: 34px; border-radius: 9px; }
+  .brand b { font-size: 16px; letter-spacing: -0.01em; }
+  .brand small { display: block; color: var(--faint); font-size: 11px; font-weight: 400; }
+
+  .side-label {
+    color: var(--faint); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.08em; padding: 6px 8px 0; font-weight: 600;
+  }
+  .history { overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 3px; }
+  .history-item {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
+    padding: 8px 9px; cursor: pointer;
+  }
+  .history-item:hover { background: var(--card); }
+  .history-item[aria-current="true"] { background: var(--card); border-color: var(--line); }
+  .history-item .hi-main { min-width: 0; flex: 1; }
+  .history-item .hi-when { font-size: 13px; }
+  .history-item .hi-path {
+    font-size: 11px; color: var(--faint); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .side-empty { color: var(--faint); font-size: 12.5px; padding: 6px 9px; }
+  .side-foot {
+    border-top: 1px solid var(--line-soft); padding: 10px 8px 2px;
+    color: var(--faint); font-size: 11.5px; display: flex; justify-content: space-between;
+  }
+
+  /* -------------------------------------------------------------- controls */
+  .btn {
+    border: 1px solid var(--line); background: var(--card); border-radius: var(--radius-sm);
+    padding: 8px 14px; cursor: pointer; transition: background .12s, border-color .12s;
+  }
+  .btn:hover:not(:disabled) { background: var(--card-2); border-color: #3a3f4a; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+  .btn-block { width: 100%; justify-content: center; }
+  .btn-big { padding: 13px 26px; font-size: 15.5px; border-radius: 11px; }
+  .btn-ghost { background: transparent; }
+
+  /* ------------------------------------------------------------------ main */
+  .main { overflow-y: auto; min-width: 0; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 44px 32px 96px; }
+  .wrap-wide { max-width: 1040px; }
+  h1 { font-size: 27px; letter-spacing: -0.02em; margin: 0 0 8px; }
+  h2 { font-size: 17px; margin: 0 0 12px; letter-spacing: -0.01em; }
+  h3 { font-size: 14px; margin: 0 0 6px; }
+  p.lede { color: var(--muted); margin: 0 0 26px; font-size: 15px; }
+  .center { text-align: center; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 18px;
+  }
+  .card + .card { margin-top: 16px; }
+  .muted { color: var(--muted); }
+  .faint { color: var(--faint); font-size: 12.5px; }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+
+  .hero-mascot { width: 108px; height: 108px; border-radius: 26px; margin-bottom: 18px; }
+
+  /* ---------------------------------------------------------------- picker */
+  .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-bottom: 12px; }
+  .crumb {
+    background: transparent; border: 0; border-radius: 6px; padding: 3px 7px;
+    cursor: pointer; color: var(--muted); font-size: 13px;
+  }
+  .crumb:hover { background: var(--card-2); color: var(--ink); }
+  .crumb:last-child { color: var(--ink); font-weight: 600; }
+  .crumb-sep { color: var(--faint); font-size: 12px; }
+  .dirlist {
+    max-height: 260px; overflow-y: auto; border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm); background: #14161a;
+  }
+  .dirrow {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    background: transparent; border: 0; border-bottom: 1px solid var(--line-soft);
+    padding: 9px 12px; cursor: pointer;
+  }
+  .dirrow:last-child { border-bottom: 0; }
+  .dirrow:hover { background: var(--card); }
+  .dirrow .dr-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag {
+    font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .tag-git { border-color: #3f5c93; color: #9dbcf5; background: var(--accent-soft); }
+  .selected-path {
+    display: flex; align-items: center; gap: 10px; margin-top: 14px;
+    background: #14161a; border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm); padding: 10px 12px;
+  }
+  .selected-path .sp-value { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+
+  .opts { display: flex; gap: 20px; flex-wrap: wrap; margin: 18px 0 4px; }
+  label.check { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; font-size: 13.5px; }
+  label.check input { margin: 3px 0 0; accent-color: var(--accent); }
+  label.check span small { display: block; color: var(--faint); font-size: 11.5px; }
+
+  .reassure {
+    margin-top: 18px; border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: 11px 14px;
+    font-size: 13.5px; color: #cfe0fb;
+  }
+
+  /* --------------------------------------------------------------- running */
+  .phases { display: flex; flex-direction: column; gap: 2px; }
+  .phase { display: flex; align-items: center; gap: 11px; padding: 8px 4px; color: var(--faint); }
+  .phase .dot {
+    width: 9px; height: 9px; border-radius: 50%; background: var(--line);
+    flex: none; box-shadow: 0 0 0 0 var(--accent-soft);
+  }
+  .phase[data-state="active"] { color: var(--ink); }
+  .phase[data-state="active"] .dot { background: var(--accent); animation: pulse 1.3s infinite; }
+  .phase[data-state="done"] { color: var(--muted); }
+  .phase[data-state="done"] .dot { background: var(--ok); }
+  .phase .phase-note { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(59,130,246,.5); }
+    70% { box-shadow: 0 0 0 7px rgba(59,130,246,0); }
+    100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
+  }
+  .counters { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .log {
+    max-height: 220px; overflow-y: auto; background: #101216; border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm); padding: 10px 12px; font-family: var(--mono);
+    font-size: 11.5px; color: var(--muted); white-space: pre-wrap; margin-top: 10px;
+  }
+  details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+
+  /* ---------------------------------------------------------------- chips */
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; border-radius: 999px;
+    padding: 3px 11px; font-size: 12.5px; border: 1px solid var(--line);
+    background: var(--card-2); color: var(--muted);
+  }
+  .chip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .chip[data-sev="critical"] { border-color: #7f2a2a; color: #fca5a5; }
+  .chip[data-sev="high"] { border-color: #7d4318; color: #fdba74; }
+  .chip[data-sev="medium"] { border-color: #7a5f14; color: #fcd34d; }
+  .chip[data-sev="low"] { border-color: #2f5187; color: #93c5fd; }
+  .chip[data-sev="info"] { border-color: var(--line); color: var(--muted); }
+  button.chip { cursor: pointer; }
+  button.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.chip[aria-pressed="true"] b { color: #fff; }
+
+  /* -------------------------------------------------------------- results */
+  .score-head { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
+  .dial { flex: none; position: relative; width: 116px; height: 116px; }
+  .dial svg { transform: rotate(-90deg); }
+  .dial .dial-value {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; line-height: 1;
+  }
+  .dial .dial-value b { font-size: 30px; letter-spacing: -0.03em; }
+  .dial .dial-value span { font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+  .score-meta { min-width: 0; flex: 1; }
+  .score-meta h1 { font-size: 22px; margin-bottom: 4px; overflow-wrap: anywhere; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 22px 0 18px; }
+  .tab {
+    background: transparent; border: 0; border-bottom: 2px solid transparent;
+    padding: 9px 14px; cursor: pointer; color: var(--muted); font-size: 14px;
+  }
+  .tab:hover { color: var(--ink); }
+  .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+
+  .svg-frame {
+    background: #f6f8fa; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 10px; overflow-x: auto;
+  }
+  .svg-frame svg { display: block; max-width: 100%; height: auto; }
+
+  .kv { display: grid; grid-template-columns: 170px 1fr; gap: 6px 16px; font-size: 13.5px; }
+  .kv dt { color: var(--faint); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .filters input[type="search"], .filters select {
+    background: var(--card); border: 1px solid var(--line); color: var(--ink);
+    border-radius: var(--radius-sm); padding: 7px 11px; font: inherit; font-size: 13.5px;
+  }
+  .filters input[type="search"] { flex: 1; min-width: 180px; }
+
+  .finding { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--card); margin-bottom: 9px; }
+  .finding.suppressed { opacity: .52; }
+  .finding > summary {
+    list-style: none; display: flex; gap: 11px; align-items: baseline;
+    padding: 12px 14px; cursor: pointer;
+  }
+  .finding > summary::-webkit-details-marker { display: none; }
+  .finding > summary:hover { background: var(--card-2); border-radius: var(--radius-sm); }
+  .sev-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; align-self: center; }
+  .sev-critical { background: var(--bad); }
+  .sev-high { background: #fb923c; }
+  .sev-medium { background: var(--warn); }
+  .sev-low { background: #60a5fa; }
+  .sev-info { background: var(--faint); }
+  .f-title { flex: 1; min-width: 0; }
+  .f-loc { font-family: var(--mono); font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+  .f-body { padding: 2px 14px 16px 33px; border-top: 1px solid var(--line-soft); }
+  .f-body h4 {
+    margin: 14px 0 4px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.07em; color: var(--faint);
+  }
+  .f-body p { margin: 0; font-size: 13.5px; }
+  pre.code {
+    background: #101216; border: 1px solid var(--line-soft); border-radius: var(--radius-sm);
+    padding: 10px 12px; overflow-x: auto; font-family: var(--mono); font-size: 12px;
+    color: #cbd5e1; margin: 0;
+  }
+  ul.refs { margin: 0; padding-left: 18px; font-size: 13px; }
+  ul.refs li { overflow-wrap: anywhere; }
+
+  table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.grid th, table.grid td {
+    text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line-soft);
+    vertical-align: top;
+  }
+  table.grid th { color: var(--faint); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
+  .status { font-size: 12px; font-weight: 600; }
+  .st-pass, .st-fixed { color: var(--ok); }
+  .st-fail { color: var(--bad); }
+  .st-review_required { color: var(--warn); }
+  .st-not_applicable { color: var(--faint); }
+
+  .dl-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .dl-btn { text-decoration: none; display: inline-block; }
+
+  /* --------------------------------------------------------------- repair */
+  .repair { border: 1px solid #3a4b6b; background: linear-gradient(180deg, rgba(59,130,246,.08), rgba(59,130,246,.02)); }
+  .repair h2 { display: flex; align-items: center; gap: 9px; }
+  .repair ul { margin: 10px 0 0; padding-left: 20px; font-size: 13.5px; color: var(--muted); }
+  .repair-confirm { margin: 16px 0 14px; }
+  .warnbox {
+    border-left: 3px solid var(--warn); background: rgba(251,191,36,.08);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: 11px 14px; font-size: 13.5px;
+  }
+
+  /* --------------------------------------------------------------- toasts */
+  #toasts { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 9px; z-index: 50; max-width: 420px; }
+  .toast {
+    background: var(--card-2); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: var(--radius-sm); padding: 11px 14px; font-size: 13.5px;
+    box-shadow: 0 12px 28px rgba(0,0,0,.45);
+  }
+  .toast[data-kind="error"] { border-left-color: var(--bad); }
+  .toast[data-kind="ok"] { border-left-color: var(--ok); }
+  .toast b { display: block; margin-bottom: 2px; }
+  .toast .toast-detail { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+
+  @media (max-width: 820px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .wrap { padding: 28px 18px 80px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <img id="brand-mascot" src="/assets/mascot.png" alt="">
+      <div><b>VibeGuard</b><small>local audit</small></div>
+    </div>
+    <button id="btn-new" class="btn btn-primary btn-block">New scan</button>
+    <div class="side-label">Recent scans</div>
+    <div id="history" class="history"></div>
+    <div class="side-foot">
+      <span id="version">—</span>
+      <span title="This server binds 127.0.0.1 only.">127.0.0.1</span>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <!-- ------------------------------------------------------- empty state -->
+    <section id="view-empty" class="wrap">
+      <div class="center">
+        <img class="hero-mascot" src="/assets/mascot.png" alt="The VibeGuard mascot">
+        <h1>Audit your app</h1>
+        <p class="lede">Pick a folder. VibeGuard reads the code, finds what would break in production, and explains it in plain language.</p>
+      </div>
+
+      <div class="card">
+        <h2>Choose a folder</h2>
+        <div id="crumbs" class="crumbs"></div>
+        <div id="dirlist" class="dirlist"></div>
+        <div class="selected-path">
+          <span class="faint">Scanning</span>
+          <span id="selected-path" class="sp-value">—</span>
+        </div>
+
+        <div class="opts">
+          <label class="check">
+            <input type="checkbox" id="opt-local-only">
+            <span>Local only<small>Never send code off this machine.</small></span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="opt-no-write">
+            <span>Leave no files<small>Skip the report files and scan history.</small></span>
+          </label>
+        </div>
+
+        <div style="margin-top:20px">
+          <button id="btn-audit" class="btn btn-primary btn-big">Audit (read-only)</button>
+        </div>
+
+        <div class="reassure">
+          <b>Audit never changes your code.</b> It only reads. Nothing is edited, deleted, moved
+          or committed, and nothing leaves this machine unless you have configured an AI provider.
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------- running state -->
+    <section id="view-running" class="wrap hidden">
+      <h1 id="run-title">Auditing…</h1>
+      <p class="lede mono" id="run-path">—</p>
+
+      <div class="card">
+        <div id="phases" class="phases"></div>
+      </div>
+
+      <div class="card">
+        <h2>Findings so far</h2>
+        <div id="run-counters" class="counters"></div>
+        <details style="margin-top:14px">
+          <summary>Show the raw event stream</summary>
+          <div id="run-log" class="log"></div>
+        </details>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------- results state -->
+    <section id="view-results" class="wrap wrap-wide hidden">
+      <div class="card">
+        <div class="score-head">
+          <div class="dial" id="dial"></div>
+          <div class="score-meta">
+            <h1 id="res-repo">—</h1>
+            <p class="faint" id="res-sub" style="margin:0 0 12px">—</p>
+            <div id="res-chips" class="counters"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="res-warnings"></div>
+
+      <div class="tabs" id="tabs" role="tablist"></div>
+      <div id="panel-overview" class="panel"></div>
+      <div id="panel-findings" class="panel hidden"></div>
+      <div id="panel-checklist" class="panel hidden"></div>
+      <div id="panel-downloads" class="panel hidden"></div>
+
+      <div id="repair-slot"></div>
+    </section>
+  </main>
+</div>
+<div id="toasts"></div>
+
+<script>
+"use strict";
+(function () {
+
+// ===========================================================================
+// tiny DOM helpers — every one of them sets text, never markup
+// ===========================================================================
+const $ = (id) => document.getElementById(id);
+
+function el(tag, opts, kids) {
+  const node = document.createElement(tag);
+  const o = opts || {};
+  if (o.class) node.className = o.class;
+  if (o.text !== undefined && o.text !== null) node.textContent = String(o.text);
+  if (o.title) node.title = String(o.title);
+  if (o.attrs) for (const k in o.attrs) node.setAttribute(k, String(o.attrs[k]));
+  if (o.on) for (const k in o.on) node.addEventListener(k, o.on[k]);
+  if (o.style) node.setAttribute("style", o.style);
+  for (const kid of kids || []) if (kid) node.appendChild(kid);
+  return node;
+}
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+function show(node, on) { node.classList.toggle("hidden", !on); }
+
+// The single place markup is injected. Its only caller passes SVG produced by
+// vibeguard.reporting.diagram on this machine — never anything from the report body.
+function injectRenderedSvg(container, svg) {
+  clear(container);
+  if (!svg) { container.appendChild(el("p", { class: "faint", text: "no diagram for this scan." })); return; }
+  const frame = el("div", { class: "svg-frame" });
+  frame.innerHTML = svg;
+  container.appendChild(frame);
+}
+
+const SEVERITIES = ["critical", "high", "medium", "low", "info"];
+
+function titleCase(s) { return String(s || "").replace(/[_.]/g, " ").replace(/^./, (c) => c.toUpperCase()); }
+function shortPath(p) {
+  const parts = String(p || "").split("/").filter(Boolean);
+  return parts.length > 2 ? ".../" + parts.slice(-2).join("/") : (p || "");
+}
+function whenText(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso || "");
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// ===========================================================================
+// toasts
+// ===========================================================================
+function toast(title, detail, kind) {
+  const node = el("div", { class: "toast", attrs: { "data-kind": kind || "info" } }, [
+    el("b", { text: title }),
+    detail ? el("div", { class: "toast-detail", text: detail }) : null,
+  ]);
+  $("toasts").appendChild(node);
+  setTimeout(() => { node.style.opacity = "0"; setTimeout(() => node.remove(), 400); },
+             kind === "error" ? 11000 : 5000);
+}
+
+// ===========================================================================
+// api
+// ===========================================================================
+async function api(path, options) {
+  const res = await fetch(path, options);
+  let body = null;
+  try { body = await res.json(); } catch (e) { /* empty or non-JSON body */ }
+  if (!res.ok) {
+    const detail = body && body.detail;
+    const err = new Error(
+      (detail && typeof detail === "object" && detail.message) ||
+      (typeof detail === "string" ? detail : "") ||
+      ("HTTP " + res.status)
+    );
+    err.status = res.status;
+    err.code = detail && typeof detail === "object" ? detail.code : null;
+    throw err;
+  }
+  return body;
+}
+const postJSON = (path, payload) => api(path, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(payload),
+});
+
+// ===========================================================================
+// state
+// ===========================================================================
+const state = {
+  meta: null,
+  cwd: null,        // directory shown in the picker
+  selected: null,   // directory a scan would run on
+  report: null,     // the report currently displayed
+  scanPath: null,   // the directory that report belongs to
+  historyTs: null,  // stored-report id, for the download links
+  source: null,     // "scan" | "history"
+  jobId: null,
+  stream: null,
+  tab: "overview",
+  filters: { severities: new Set(), category: "", query: "" },
+};
+
+function view(name) {
+  show($("view-empty"), name === "empty");
+  show($("view-running"), name === "running");
+  show($("view-results"), name === "results");
+  $("main").scrollTop = 0;
+}
+
+// ===========================================================================
+// folder picker
+// ===========================================================================
+async function browse(path) {
+  let data;
+  try {
+    data = await api("/api/browse?path=" + encodeURIComponent(path || ""));
+  } catch (e) {
+    toast("Cannot open that folder", e.message, "error");
+    return;
+  }
+  state.cwd = data.path;
+  setSelected(data.path);
+  renderCrumbs(data);
+  renderDirs(data);
+}
+
+function setSelected(path) {
+  state.selected = path;
+  $("selected-path").textContent = path;
+  loadHistory(path);
+}
+
+function renderCrumbs(data) {
+  const box = $("crumbs");
+  clear(box);
+  if (data.parent) {
+    box.appendChild(el("button", {
+      class: "crumb", text: "↑ up", on: { click: () => browse(data.parent) },
+    }));
+    box.appendChild(el("span", { class: "crumb-sep", text: "·" }));
+  }
+  (data.crumbs || []).forEach((crumb, i) => {
+    if (i) box.appendChild(el("span", { class: "crumb-sep", text: "/" }));
+    box.appendChild(el("button", {
+      class: "crumb", text: crumb.name, on: { click: () => browse(crumb.path) },
+    }));
+  });
+}
+
+function renderDirs(data) {
+  const box = $("dirlist");
+  clear(box);
+  if (!data.entries.length) {
+    box.appendChild(el("div", { class: "side-empty", text: "No sub-folders here. This folder is ready to scan." }));
+    return;
+  }
+  for (const entry of data.entries) {
+    const tags = [];
+    if (entry.is_git) tags.push(el("span", { class: "tag tag-git", text: "git" }));
+    for (const hint of entry.hints.slice(0, 2)) tags.push(el("span", { class: "tag", text: hint }));
+    box.appendChild(el("button", {
+      class: "dirrow",
+      on: { click: () => browse(entry.path) },
+    }, [
+      el("span", { class: "faint", text: "▸" }),
+      el("span", { class: "dr-name", text: entry.name }),
+      ...tags,
+    ]));
+  }
+}
+
+// ===========================================================================
+// history sidebar
+// ===========================================================================
+async function loadHistory(path) {
+  const box = $("history");
+  let data;
+  try {
+    data = await api("/api/history?path=" + encodeURIComponent(path || ""));
+  } catch (e) {
+    clear(box);
+    box.appendChild(el("div", { class: "side-empty", text: "History unavailable here." }));
+    return;
+  }
+  clear(box);
+  if (!data.entries.length) {
+    box.appendChild(el("div", { class: "side-empty", text: "No scans recorded for this folder yet." }));
+    return;
+  }
+  for (const entry of data.entries) {
+    const score = entry.overall;
+    const band = score >= 85 ? "low" : score >= 60 ? "medium" : "critical";
+    box.appendChild(el("button", {
+      class: "history-item",
+      attrs: { "aria-current": String(entry.ts === state.historyTs) },
+      title: entry.repo,
+      on: { click: () => openStored(entry.ts, data.path) },
+    }, [
+      el("span", { class: "hi-main" }, [
+        el("div", { class: "hi-when", text: whenText(entry.scan_date) + " · " + entry.mode }),
+        el("div", { class: "hi-path", text: shortPath(entry.repo) }),
+      ]),
+      el("span", { class: "chip", attrs: { "data-sev": band } }, [el("b", { text: String(score) })]),
+    ]));
+  }
+}
+
+async function openStored(ts, path) {
+  try {
+    const report = await api("/api/report/" + encodeURIComponent(ts) + "?path=" + encodeURIComponent(path));
+    state.historyTs = ts;
+    state.scanPath = path;
+    state.source = "history";
+    showReport(report);
+    loadHistory(path);
+  } catch (e) {
+    toast("Could not open that scan", e.message, "error");
+  }
+}
+
+// ===========================================================================
+// running view — the event stream, rendered as progress
+// ===========================================================================
+const AUDIT_PHASES = [
+  { key: "discovery", label: "Reading the project", match: (s) => s.startsWith("discovery.") },
+  { key: "rules", label: "Choosing and running rules", match: (s) => s === "rule_selection" || s === "detection" || s.startsWith("detect:") },
+  { key: "adapters", label: "External scanners", match: (s) => s === "adapters" || s.startsWith("adapter:") },
+  { key: "memory", label: "Suppressions, baseline, history", match: (s) => ["suppressions", "baseline", "regression"].includes(s) },
+  { key: "checklist", label: "Production checklist", match: (s) => s === "checklist" },
+  { key: "report", label: "Scoring and report", match: (s) => s === "scoring" },
+];
+const FIX_PHASES = [
+  { key: "discovery", label: "Reading the project", match: (s) => s.startsWith("discovery.") },
+  { key: "rules", label: "Choosing and running rules", match: (s) => s === "rule_selection" || s === "detection" || s.startsWith("detect:") || s === "adapters" || s.startsWith("adapter:") },
+  { key: "git", label: "Git safety net and fix branch", match: (s) => s.startsWith("git.") },
+  { key: "validation", label: "Validation baseline", match: (s) => s.startsWith("validation.") },
+  { key: "repair", label: "Repairing, one validated commit at a time", match: (s) => s === "repair" },
+  { key: "report", label: "Scoring and report", match: (s) => s === "checklist" || s === "scoring" },
+];
+
+const runner = {
+  phases: [],
+  counts: {},
+  nodes: {},
+};
+
+function startRunView(kind, path) {
+  runner.phases = kind === "fix" ? FIX_PHASES : AUDIT_PHASES;
+  runner.counts = {};
+  runner.nodes = {};
+  $("run-title").textContent = kind === "fix" ? "Repairing…" : "Auditing…";
+  $("run-path").textContent = path;
+  const box = $("phases");
+  clear(box);
+  for (const phase of runner.phases) {
+    const note = el("span", { class: "phase-note", text: "" });
+    const node = el("div", { class: "phase", attrs: { "data-state": "pending" } }, [
+      el("span", { class: "dot" }),
+      el("span", { text: phase.label }),
+      note,
+    ]);
+    runner.nodes[phase.key] = { node: node, note: note };
+    box.appendChild(node);
+  }
+  clear($("run-log"));
+  renderRunCounters();
+  view("running");
+}
+
+function markPhase(stage) {
+  let hitIndex = -1;
+  runner.phases.forEach((phase, i) => { if (phase.match(stage)) hitIndex = i; });
+  if (hitIndex < 0) return;
+  runner.phases.forEach((phase, i) => {
+    const entry = runner.nodes[phase.key];
+    if (!entry) return;
+    const st = i < hitIndex ? "done" : i === hitIndex ? "active" : "pending";
+    entry.node.setAttribute("data-state", st);
+    if (i === hitIndex) entry.note.textContent = stage.length > 42 ? stage.slice(0, 41) + "…" : stage;
+    else if (st === "done") entry.note.textContent = "";
+  });
+}
+
+function finishPhases() {
+  for (const phase of runner.phases) {
+    const entry = runner.nodes[phase.key];
+    if (entry) { entry.node.setAttribute("data-state", "done"); entry.note.textContent = ""; }
+  }
+}
+
+function renderRunCounters() {
+  const box = $("run-counters");
+  clear(box);
+  const total = SEVERITIES.reduce((n, s) => n + (runner.counts[s] || 0), 0);
+  if (!total) {
+    box.appendChild(el("span", { class: "faint", text: "Nothing found yet." }));
+    return;
+  }
+  for (const sev of SEVERITIES) {
+    const n = runner.counts[sev] || 0;
+    if (!n) continue;
+    box.appendChild(el("span", { class: "chip", attrs: { "data-sev": sev } }, [
+      el("b", { text: String(n) }), el("span", { text: sev }),
+    ]));
+  }
+}
+
+function logLine(text) {
+  const box = $("run-log");
+  box.appendChild(el("div", { text: text }));
+  box.scrollTop = box.scrollHeight;
+}
+
+function openStream(scanId, kind) {
+  if (state.stream) { state.stream.close(); state.stream = null; }
+  state.jobId = scanId;
+  const es = new EventSource("/api/scan/" + encodeURIComponent(scanId) + "/events");
+  state.stream = es;
+
+  const on = (name, fn) => es.addEventListener(name, (ev) => {
+    let payload = {};
+    try { payload = JSON.parse(ev.data); } catch (e) { return; }
+    fn(payload.data !== undefined ? payload.data : payload, payload);
+  });
+
+  on("scan.started", (d) => logLine("scan.started " + (d.mode || "")));
+  on("scan.stage", (d) => { markPhase(String(d.stage || "")); logLine("stage " + d.stage); });
+  on("scan.issue_found", (d) => {
+    const finding = d.finding || {};
+    if (finding.suppressed) return;
+    const sev = finding.severity || "info";
+    runner.counts[sev] = (runner.counts[sev] || 0) + 1;
+    renderRunCounters();
+    logLine("found [" + sev + "] " + (finding.rule_id || "") + " " + (finding.title || ""));
+  });
+  on("scan.completed", (d) => logLine("scan.completed — " + (d.findings || 0) + " finding(s)"));
+  on("repair.started", (d) => logLine("repair.started " + (d.rule_id || d.finding_id || "")));
+  on("repair.completed", (d) => logLine("repair.completed " + (d.rule_id || "") + " " + (d.status || "")));
+  on("repair.failed", (d) => logLine("repair.failed " + (d.rule_id || "") + " " + (d.error || d.reason || "")));
+  on("validation.started", (d) => logLine("validation.started " + (d.name || "")));
+  on("validation.completed", (d) => logLine("validation.completed " + (d.name || "") + " " + (d.passed === undefined ? "" : d.passed)));
+  on("report.generated", (d) => logLine("report.generated " + (d.path || "")));
+  on("report.written", (d) => logLine("wrote " + (d.paths || []).join(", ")));
+  on("report.failed", (d) => toast("Report not written", d.error, "error"));
+  on("ai.blocked", (d) => toast("AI provider blocked", d.reason, "info"));
+
+  on("result", (d) => {
+    finishPhases();
+    es.close(); state.stream = null;
+    const report = d.report;
+    if (!report) { toast("Scan produced no report", "", "error"); view("empty"); return; }
+    state.source = "scan";
+    state.historyTs = report.history_ts || null;
+    state.scanPath = report.scan_path || state.selected;
+    showReport(report);
+    loadHistory(state.scanPath);
+    toast(kind === "fix" ? "Repair finished" : "Audit finished",
+          (report.counts && report.counts.total ? report.counts.total : 0) + " finding(s)", "ok");
+  });
+
+  on("error", (d) => {
+    es.close(); state.stream = null;
+    finishPhases();
+    view("empty");
+    if (d.code === "dirty_worktree") {
+      toast("Uncommitted changes", d.error, "error");
+    } else {
+      toast(kind === "fix" ? "Repair failed" : "Scan failed", d.error || "unknown error", "error");
+    }
+  });
+
+  es.onerror = () => {
+    // EventSource retries by itself; only a closed stream is worth reporting.
+    if (es.readyState === EventSource.CLOSED && state.stream === es) {
+      state.stream = null;
+      toast("Lost the progress stream", "The scan may still be running — reload to check.", "error");
+    }
+  };
+}
+
+// ===========================================================================
+// starting scans
+// ===========================================================================
+async function startAudit() {
+  const path = state.selected;
+  if (!path) { toast("Pick a folder first", "", "error"); return; }
+  $("btn-audit").disabled = true;
+  startRunView("audit", path);
+  try {
+    const res = await postJSON("/api/scan", {
+      path: path,
+      mode: "audit",
+      options: {
+        local_only: $("opt-local-only").checked,
+        no_write: $("opt-no-write").checked,
+      },
+    });
+    openStream(res.scan_id, "audit");
+  } catch (e) {
+    view("empty");
+    toast(e.status === 409 ? "Already busy" : "Could not start the scan", e.message, "error");
+  } finally {
+    $("btn-audit").disabled = false;
+  }
+}
+
+async function startFix(path, button) {
+  button.disabled = true;
+  startRunView("fix", path);
+  try {
+    const res = await postJSON("/api/fix", { path: path, confirm: true });
+    openStream(res.scan_id, "fix");
+  } catch (e) {
+    view("results");
+    button.disabled = false;
+    if (e.code === "dirty_worktree") {
+      toast("Commit or stash first", e.message, "error");
+    } else if (e.code === "no_git_repo") {
+      toast("Not a git repository", e.message, "error");
+    } else {
+      toast(e.status === 409 ? "Already busy" : "Could not start the repair", e.message, "error");
+    }
+  }
+}
+
+// ===========================================================================
+// results — header
+// ===========================================================================
+function scoreBand(score) { return score >= 85 ? "ok" : score >= 60 ? "warn" : "bad"; }
+
+function renderDial(score) {
+  const box = $("dial");
+  clear(box);
+  const band = scoreBand(score);
+  const colour = band === "ok" ? "#34d399" : band === "warn" ? "#fbbf24" : "#f87171";
+  const R = 50, C = 2 * Math.PI * R;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 116 116");
+  svg.setAttribute("width", "116");
+  svg.setAttribute("height", "116");
+  const mk = (stroke, dash) => {
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", "58"); c.setAttribute("cy", "58"); c.setAttribute("r", String(R));
+    c.setAttribute("fill", "none"); c.setAttribute("stroke", stroke);
+    c.setAttribute("stroke-width", "9"); c.setAttribute("stroke-linecap", "round");
+    if (dash) { c.setAttribute("stroke-dasharray", dash); }
+    return c;
+  };
+  svg.appendChild(mk("#2c3039", null));
+  svg.appendChild(mk(colour, (C * Math.max(0, Math.min(100, score)) / 100).toFixed(1) + " " + C.toFixed(1)));
+  box.appendChild(svg);
+  box.appendChild(el("div", { class: "dial-value" }, [
+    el("b", { text: String(score), style: "color:" + colour }),
+    el("span", { text: "readiness" }),
+  ]));
+}
+
+function renderHeader(report) {
+  const overall = report.overall_after !== null && report.overall_after !== undefined
+    ? report.overall_after : report.overall_before;
+  renderDial(overall);
+  $("res-repo").textContent = report.repo;
+  const bits = [
+    titleCase(report.mode) + " scan",
+    whenText(report.scan_date),
+    "vibeguard " + report.vibeguard_version,
+    report.local_only ? "local only" : (report.ai_used ? "AI assisted" : "deterministic"),
+  ];
+  if (report.overall_after !== null && report.overall_after !== undefined) {
+    bits.splice(1, 0, "score " + report.overall_before + " → " + report.overall_after);
+  }
+  $("res-sub").textContent = bits.join(" · ");
+
+  const chips = $("res-chips");
+  clear(chips);
+  const counts = report.counts || {};
+  for (const sev of SEVERITIES) {
+    const n = counts[sev] || 0;
+    if (!n) continue;
+    chips.appendChild(el("span", { class: "chip", attrs: { "data-sev": sev } }, [
+      el("b", { text: String(n) }), el("span", { text: sev }),
+    ]));
+  }
+  if (!SEVERITIES.some((s) => counts[s])) {
+    chips.appendChild(el("span", { class: "chip" }, [el("b", { text: "0" }), el("span", { text: "open findings" })]));
+  }
+  if (counts.suppressed) {
+    chips.appendChild(el("span", { class: "chip", title: "Accepted by a human in .vibeguard/suppressions.yml" },
+      [el("b", { text: String(counts.suppressed) }), el("span", { text: "suppressed" })]));
+  }
+  if (counts.baselined) {
+    chips.appendChild(el("span", { class: "chip", title: "In .vibeguard/baseline.json — reported, not gated" },
+      [el("b", { text: String(counts.baselined) }), el("span", { text: "baselined" })]));
+  }
+
+  const warnBox = $("res-warnings");
+  clear(warnBox);
+  for (const warning of report.warnings || []) {
+    warnBox.appendChild(el("div", { class: "card warnbox", text: warning }));
+  }
+}
+
+// ===========================================================================
+// results — tabs
+// ===========================================================================
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "findings", label: "Findings" },
+  { key: "checklist", label: "Checklist" },
+  { key: "downloads", label: "Downloads" },
+];
+
+function renderTabs() {
+  const bar = $("tabs");
+  clear(bar);
+  for (const tab of TABS) {
+    bar.appendChild(el("button", {
+      class: "tab", text: tab.label,
+      attrs: { role: "tab", "aria-selected": String(state.tab === tab.key) },
+      on: { click: () => selectTab(tab.key) },
+    }));
+  }
+}
+
+function selectTab(key) {
+  state.tab = key;
+  renderTabs();
+  for (const tab of TABS) show($("panel-" + tab.key), tab.key === key);
+}
+
+// ===========================================================================
+// results — overview
+// ===========================================================================
+function techRows(tech) {
+  return [
+    ["languages", Object.keys(tech.languages || {}).map((k) => k + " (" + tech.languages[k] + ")").join(", ")],
+    ["frameworks", (tech.frameworks || []).join(", ")],
+    ["databases", (tech.databases || []).join(", ")],
+    ["ORMs", (tech.orms || []).join(", ")],
+    ["package managers", (tech.package_managers || []).join(", ")],
+    ["containers", (tech.containers || []).join(", ")],
+    ["CI / CD", (tech.ci_cd || []).join(", ")],
+    ["tests", (tech.test_frameworks || []).join(", ")],
+    ["auth", (tech.auth || []).join(", ")],
+  ].filter((row) => row[1]);
+}
+
+function renderOverview(report) {
+  const panel = $("panel-overview");
+  clear(panel);
+
+  const scores = el("div");
+  injectRenderedSvg(scores, (report.diagrams || {}).scores);
+  panel.appendChild(el("div", { class: "card" }, [el("h2", { text: "Readiness by category" }), scores]));
+
+  const arch = el("div");
+  injectRenderedSvg(arch, (report.diagrams || {}).architecture);
+  panel.appendChild(el("div", { class: "card" }, [
+    el("h2", { text: "What VibeGuard found in your app" }),
+    arch,
+    el("p", { class: "faint", style: "margin:10px 0 0",
+              text: "Colour is the health of the category that says the most about each box. Grey means unmeasured, not healthy." }),
+  ]));
+
+  const dl = el("dl", { class: "kv" });
+  for (const row of techRows(report.tech || {})) {
+    dl.appendChild(el("dt", { text: row[0] }));
+    dl.appendChild(el("dd", { text: row[1] }));
+  }
+  const scale = report.scale || {};
+  dl.appendChild(el("dt", { text: "scale" }));
+  dl.appendChild(el("dd", {
+    text: (scale.scale || "?") + " — " + (scale.loc || 0) + " LOC, " + (scale.service_count || 1) +
+          " service(s), sensitive data: " + (scale.has_sensitive_data ? "yes" : "no"),
+  }));
+  panel.appendChild(el("div", { class: "card" }, [el("h2", { text: "Detected stack" }), dl]));
+
+  const diff = report.regression;
+  const regCard = el("div", { class: "card" }, [el("h2", { text: "Since your last scan" })]);
+  if (!diff) {
+    regCard.appendChild(el("p", { class: "faint", text: "No earlier scan on record for this folder, so there is nothing to compare against yet." }));
+  } else {
+    const chips = el("div", { class: "counters" });
+    const pairs = [["new", diff.new.length], ["resolved", diff.resolved.length],
+                   ["regressed", diff.regressed.length], ["unchanged", diff.unchanged]];
+    for (const [label, n] of pairs) {
+      chips.appendChild(el("span", { class: "chip" }, [el("b", { text: String(n) }), el("span", { text: label })]));
+    }
+    regCard.appendChild(chips);
+    if (diff.regressed.length) {
+      regCard.appendChild(el("p", { class: "faint", style: "margin-top:10px",
+        text: "Regressed means it was fixed once and has come back: " + diff.regressed.slice(0, 8).join(", ") }));
+    }
+  }
+  panel.appendChild(regCard);
+
+  if ((report.findings || []).some((f) => f.fix)) panel.appendChild(repairResultsCard(report));
+}
+
+// ===========================================================================
+// results — findings
+// ===========================================================================
+function findingMatches(finding) {
+  const f = state.filters;
+  if (f.severities.size && !f.severities.has(finding.severity)) return false;
+  if (f.category && finding.category !== f.category) return false;
+  if (f.query) {
+    const haystack = [finding.title, finding.rule_id, finding.file, finding.description,
+                      finding.category].join(" ").toLowerCase();
+    if (!haystack.includes(f.query)) return false;
+  }
+  return true;
+}
+
+function location(finding) {
+  if (!finding.file) return "";
+  return finding.file + (finding.line ? ":" + finding.line : "");
+}
+
+function findingCard(finding) {
+  const details = el("details", { class: "finding" + (finding.suppressed ? " suppressed" : "") });
+  const summary = el("summary", {}, [
+    el("span", { class: "sev-dot sev-" + finding.severity, title: finding.severity }),
+    el("span", { class: "f-title" }, [
+      el("span", { text: finding.title }),
+      el("div", { class: "faint", text: finding.rule_id + " · " + finding.category + " · " + finding.severity +
+                                        " · " + finding.confidence + " confidence" +
+                                        (finding.suppressed ? " · suppressed" : "") +
+                                        (finding.baselined ? " · baselined" : "") }),
+    ]),
+    el("span", { class: "f-loc", text: location(finding) }),
+  ]);
+  details.appendChild(summary);
+
+  const body = el("div", { class: "f-body" });
+  const section = (heading, node) => {
+    body.appendChild(el("h4", { text: heading }));
+    body.appendChild(node);
+  };
+  if (finding.description) section("What it is", el("p", { text: finding.description }));
+  if (finding.why_it_matters) section("Why it matters", el("p", { text: finding.why_it_matters }));
+
+  for (const evidence of finding.evidence || []) {
+    const label = evidence.file + (evidence.line ? ":" + evidence.line : "");
+    body.appendChild(el("h4", { text: "Evidence — " + label }));
+    if (evidence.snippet) body.appendChild(el("pre", { class: "code", text: evidence.snippet }));
+    if (evidence.note) body.appendChild(el("p", { class: "faint", text: evidence.note }));
+  }
+
+  if (finding.recommended_followup) section("What to do", el("p", { text: finding.recommended_followup }));
+
+  if (finding.fix) {
+    const fix = finding.fix;
+    const lines = [
+      "status: " + fix.status,
+      fix.commit_sha ? "commit: " + fix.commit_sha.slice(0, 12) : null,
+      fix.patch_summary || null,
+      fix.residual_risk ? "residual risk: " + fix.residual_risk : null,
+    ].filter(Boolean);
+    section("Repair", el("p", { text: lines.join(" · ") }));
+  }
+
+  if (finding.suppression) {
+    const s = finding.suppression;
+    section("Suppressed", el("p", { text: s.reason + (s.note ? " — " + s.note : "") + (s.author ? " (" + s.author + ")" : "") }));
+  }
+
+  if ((finding.references || []).length) {
+    const list = el("ul", { class: "refs" });
+    for (const ref of finding.references) {
+      if (/^https?:\/\//i.test(ref)) {
+        list.appendChild(el("li", {}, [el("a", {
+          text: ref, attrs: { href: ref, target: "_blank", rel: "noreferrer noopener" },
+        })]));
+      } else {
+        list.appendChild(el("li", { text: ref }));
+      }
+    }
+    section("References", list);
+  }
+
+  body.appendChild(el("p", { class: "faint", style: "margin-top:14px",
+    text: "autofix class: " + finding.autofix_safety + " · fingerprint " + finding.fingerprint.slice(0, 16) }));
+  details.appendChild(body);
+  return details;
+}
+
+function renderFindings(report) {
+  const panel = $("panel-findings");
+  clear(panel);
+  const findings = report.findings || [];
+  if (!findings.length) {
+    panel.appendChild(el("div", { class: "card center" }, [
+      el("h2", { text: "Nothing to report" }),
+      el("p", { class: "faint", text: "No rule fired on this project. That is not a promise it is perfect — check the Checklist tab for what was actually measured." }),
+    ]));
+    return;
+  }
+
+  const card = el("div", { class: "card" });
+  const filters = el("div", { class: "filters" });
+  const counts = report.counts || {};
+  for (const sev of SEVERITIES) {
+    const n = findings.filter((f) => f.severity === sev && !f.suppressed).length;
+    if (!n && !counts[sev]) continue;
+    const chip = el("button", {
+      class: "chip", attrs: { "data-sev": sev, "aria-pressed": String(state.filters.severities.has(sev)) },
+      on: { click: () => {
+        state.filters.severities.has(sev) ? state.filters.severities.delete(sev) : state.filters.severities.add(sev);
+        renderFindings(report);
+      } },
+    }, [el("b", { text: String(n) }), el("span", { text: sev })]);
+    filters.appendChild(chip);
+  }
+  const categories = Array.from(new Set(findings.map((f) => f.category))).sort();
+  const select = el("select", { on: { change: (ev) => { state.filters.category = ev.target.value; renderFindings(report); } } });
+  select.appendChild(el("option", { text: "all categories", attrs: { value: "" } }));
+  for (const cat of categories) {
+    const opt = el("option", { text: cat, attrs: { value: cat } });
+    if (state.filters.category === cat) opt.selected = true;
+    select.appendChild(opt);
+  }
+  filters.appendChild(select);
+  const search = el("input", {
+    attrs: { type: "search", placeholder: "Filter by title, rule or file…", value: state.filters.query },
+    on: { input: (ev) => { state.filters.query = ev.target.value.toLowerCase(); renderList(); } },
+  });
+  filters.appendChild(search);
+  card.appendChild(filters);
+
+  const list = el("div");
+  card.appendChild(list);
+  panel.appendChild(card);
+
+  function renderList() {
+    clear(list);
+    const visible = findings.filter(findingMatches);
+    if (!visible.length) {
+      list.appendChild(el("p", { class: "faint", text: "No finding matches those filters." }));
+      return;
+    }
+    const order = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+    visible.sort((a, b) => (a.suppressed - b.suppressed) || (order[a.severity] - order[b.severity]));
+    for (const finding of visible) list.appendChild(findingCard(finding));
+    list.appendChild(el("p", { class: "faint", style: "margin-top:12px",
+      text: "Showing " + visible.length + " of " + findings.length + " findings." }));
+  }
+  renderList();
+}
+
+// ===========================================================================
+// results — checklist
+// ===========================================================================
+function renderChecklist(report) {
+  const panel = $("panel-checklist");
+  clear(panel);
+  const items = report.checklist || [];
+
+  const svgBox = el("div");
+  injectRenderedSvg(svgBox, (report.diagrams || {}).checklist);
+  panel.appendChild(el("div", { class: "card" }, [
+    el("h2", { text: "Checklist coverage" }),
+    svgBox,
+    el("p", { class: "faint", style: "margin:10px 0 0",
+              text: "review_required includes topics with no automated detector yet. They are never silently passed." }),
+  ]));
+
+  if (!items.length) return;
+  const sections = new Map();
+  for (const item of items) {
+    if (!sections.has(item.section)) sections.set(item.section, []);
+    sections.get(item.section).push(item);
+  }
+  for (const [section, entries] of sections) {
+    const table = el("table", { class: "grid" });
+    const head = el("tr", {}, [
+      el("th", { text: "topic" }), el("th", { text: "status" }),
+      el("th", { text: "detectors" }), el("th", { text: "note" }),
+    ]);
+    table.appendChild(el("thead", {}, [head]));
+    const body = el("tbody");
+    for (const item of entries) {
+      body.appendChild(el("tr", {}, [
+        el("td", { text: item.name }),
+        el("td", {}, [el("span", { class: "status st-" + item.status, text: item.status })]),
+        el("td", { class: "mono", text: (item.detectors || []).join(", ") || "—" }),
+        el("td", { class: "faint", text: item.note || item.validation || "" }),
+      ]));
+    }
+    table.appendChild(body);
+    const counts = entries.reduce((acc, i) => { acc[i.status] = (acc[i.status] || 0) + 1; return acc; }, {});
+    const summaryText = Object.keys(counts).map((k) => counts[k] + " " + k).join(", ");
+    const details = el("details", { class: "card" }, [
+      el("summary", { text: section + " — " + entries.length + " topics (" + summaryText + ")" }),
+      el("div", { style: "margin-top:12px; overflow-x:auto" }, [table]),
+    ]);
+    panel.appendChild(details);
+  }
+}
+
+// ===========================================================================
+// results — downloads
+// ===========================================================================
+function downloadBase() {
+  if (state.historyTs) {
+    return "/api/report/" + encodeURIComponent(state.historyTs) +
+           "/download?path=" + encodeURIComponent(state.scanPath || "") + "&fmt=";
+  }
+  if (state.source === "scan" && state.jobId) {
+    return "/api/scan/" + encodeURIComponent(state.jobId) + "/download?fmt=";
+  }
+  return null;
+}
+
+function renderDownloads(report) {
+  const panel = $("panel-downloads");
+  clear(panel);
+  const base = downloadBase();
+  const card = el("div", { class: "card" }, [
+    el("h2", { text: "Take the report with you" }),
+    el("p", { class: "faint", text: "The same three files the CLI writes, rendered from this exact scan. The HTML report is self-contained: no network, no JavaScript required." }),
+  ]);
+  if (!base) {
+    card.appendChild(el("p", { class: "faint", text: "This scan was not recorded, so there is nothing to download. Re-run without “Leave no files” to keep a copy." }));
+  } else {
+    const row = el("div", { class: "dl-row", style: "margin-top:14px" });
+    for (const [fmt, label] of [["md", "Markdown"], ["html", "HTML"], ["json", "JSON"]]) {
+      row.appendChild(el("a", {
+        class: "btn dl-btn", text: label,
+        attrs: { href: base + fmt, download: "vibeguard-report." + fmt },
+      }));
+    }
+    card.appendChild(row);
+  }
+  panel.appendChild(card);
+
+  if ((report.adapters_used || []).length) {
+    const list = el("ul", { class: "refs" });
+    for (const line of report.adapters_used) list.appendChild(el("li", { text: line }));
+    panel.appendChild(el("div", { class: "card" }, [el("h2", { text: "External scanners" }), list]));
+  }
+}
+
+// ===========================================================================
+// repair
+// ===========================================================================
+function repairResultsCard(report) {
+  const attempted = (report.findings || []).filter((f) => f.fix);
+  const table = el("table", { class: "grid" });
+  table.appendChild(el("thead", {}, [el("tr", {}, [
+    el("th", { text: "rule" }), el("th", { text: "location" }), el("th", { text: "status" }),
+    el("th", { text: "commit" }), el("th", { text: "validation" }),
+  ])]));
+  const body = el("tbody");
+  for (const finding of attempted) {
+    const fix = finding.fix;
+    const validation = (fix.validation || [])
+      .map((step) => step.name + (step.skipped ? " (skipped)" : step.passed ? " ✓" : " ✗"))
+      .join(", ");
+    body.appendChild(el("tr", {}, [
+      el("td", { class: "mono", text: finding.rule_id }),
+      el("td", { class: "mono", text: location(finding) || "." }),
+      el("td", {}, [el("span", { class: "status st-" + (fix.status === "fixed" ? "pass" : "fail"), text: fix.status })]),
+      el("td", { class: "mono", text: fix.commit_sha ? fix.commit_sha.slice(0, 12) : "—" }),
+      el("td", { class: "faint", text: validation || fix.patch_summary || "" }),
+    ]));
+  }
+  table.appendChild(body);
+  const fixed = attempted.filter((f) => f.fix.status === "fixed").length;
+  return el("div", { class: "card" }, [
+    el("h2", { text: "Repairs" }),
+    el("p", { class: "faint", text: fixed + " of " + attempted.length + " attempted repair(s) were applied and validated. Each one is its own commit on the fix branch — review the diff before merging." }),
+    el("div", { style: "margin-top:12px; overflow-x:auto" }, [table]),
+  ]);
+}
+
+function renderRepairOffer(report) {
+  const slot = $("repair-slot");
+  clear(slot);
+  if (String(report.mode || "").startsWith("fix")) return;
+  const candidates = report.safe_autofix_candidates || 0;
+  if (!candidates) return;
+
+  const checkbox = el("input", { attrs: { type: "checkbox", id: "repair-confirm-box" } });
+  const button = el("button", { class: "btn btn-primary btn-big", text: "Create fix branch & repair",
+                                attrs: { disabled: "disabled" } });
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) button.removeAttribute("disabled");
+    else button.setAttribute("disabled", "disabled");
+  });
+  button.addEventListener("click", () => startFix(state.scanPath || state.selected, button));
+
+  slot.appendChild(el("div", { class: "card repair" }, [
+    el("h2", {}, [el("span", { text: "Repair" }),
+                  el("span", { class: "chip", attrs: { "data-sev": "low" } },
+                     [el("b", { text: String(candidates) }), el("span", { text: "safe to fix automatically" })])]),
+    el("p", { class: "muted", style: "margin:0",
+              text: "Safe mode repairs only the findings VibeGuard can fix without judgement calls. Everything else stays for you." }),
+    el("ul", {}, [
+      el("li", { text: "Your work is committed first — VibeGuard refuses to start on a dirty worktree." }),
+      el("li", { text: "Changes land on a new branch, never on the one you are on." }),
+      el("li", { text: "Every fix is validated (syntax, lint, tests where they exist) and committed on its own." }),
+      el("li", { text: "A fix that fails validation is rolled back, not left half-applied." }),
+    ]),
+    el("label", { class: "check repair-confirm" }, [
+      checkbox,
+      el("span", {}, [
+        el("span", { text: "Yes — create a branch and commit " + candidates + " automatic repair(s) to it." }),
+        el("small", { text: "Nothing happens until you press the button below." }),
+      ]),
+    ]),
+    button,
+  ]));
+}
+
+// ===========================================================================
+// showing a report
+// ===========================================================================
+function showReport(report) {
+  state.report = report;
+  state.filters = { severities: new Set(), category: "", query: "" };
+  if (report.scan_path) state.scanPath = report.scan_path;
+  if (report.history_ts !== undefined) state.historyTs = report.history_ts;
+  renderHeader(report);
+  renderOverview(report);
+  renderFindings(report);
+  renderChecklist(report);
+  renderDownloads(report);
+  renderRepairOffer(report);
+  selectTab("overview");
+  view("results");
+}
+
+// ===========================================================================
+// boot
+// ===========================================================================
+async function boot() {
+  renderTabs();
+  $("btn-audit").addEventListener("click", startAudit);
+  $("btn-new").addEventListener("click", () => {
+    state.historyTs = null;
+    state.source = null;
+    view("empty");
+    loadHistory(state.selected);
+  });
+
+  try {
+    state.meta = await api("/api/meta");
+    $("version").textContent = "v" + state.meta.version;
+    await browse(state.meta.initial_path);
+  } catch (e) {
+    toast("Cannot reach the VibeGuard server", e.message, "error");
+  }
+  view("empty");
+}
+
+boot();
+
+})();
+</script>
+</body>
+</html>
