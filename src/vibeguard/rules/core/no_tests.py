@@ -58,6 +58,7 @@ class NoTestSuiteRule(Rule):
         "https://jestjs.io/docs/getting-started",
     ]
     technologies: ClassVar[set[str]] = set()
+    topics: ClassVar[set[str]] = {"testing.unit-tests"}
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.MANUAL_CHANGE_REQUIRED
 

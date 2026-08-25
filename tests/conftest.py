@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,36 @@ def make_context(root: Path, config: VibeguardConfig | None = None) -> ScanConte
     return ScanContext(
         root=root, files=files, tech=tech, graph=graph, scale=scale, config=config
     )
+
+
+def write_repo(root: Path, files: Mapping[str, str]) -> Path:
+    """Materialise ``{relpath: content}`` under ``root`` and return it."""
+    for rel, content in files.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    return root
+
+
+def context_from(
+    root: Path, files: Mapping[str, str], config: VibeguardConfig | None = None
+) -> ScanContext:
+    """Write ``files`` under ``root`` and run discovery over the result."""
+    write_repo(root, files)
+    return make_context(root, config)
+
+
+def run_rule(rule_cls: type, root: Path, files: Mapping[str, str]) -> list:
+    """Instantiate ``rule_cls``, gate it, and return its findings for ``files``.
+
+    Returns ``[]`` when the rule's applicability gate rejects the fixture, which is
+    exactly what a negative test wants to assert.
+    """
+    ctx = context_from(root, files)
+    rule = rule_cls()
+    if not rule.applicable(ctx):
+        return []
+    return rule.detect(ctx)
 
 
 @pytest.fixture
