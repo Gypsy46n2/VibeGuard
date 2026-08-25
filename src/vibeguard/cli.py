@@ -1,4 +1,23 @@
-"""VibeGuard command line interface (ARCHITECTURE.md §11)."""
+"""VibeGuard command line interface (ARCHITECTURE.md §11).
+
+``--output`` names everything a run should produce, as a comma-separated list
+(DECISIONS.md D33):
+
+``table``
+    The rich terminal summary. The default.
+``json``
+    Echo the canonical report to stdout. ``vibeguard-report.json`` is written either
+    way — INTERFACES.md §8 calls it canonical, so it is never optional.
+``jsonl``
+    Stream ``{"event", "ts", "data"}`` lines to stdout as the scan runs (§6).
+``md`` / ``html``
+    Write ``vibeguard-report.md`` / ``vibeguard-report.html`` next to the JSON.
+``all``
+    ``table,json,md,html``.
+
+The default is ``table,md``, which — with the always-written JSON — gives the
+documented "json + md" pair plus a readable terminal summary.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +40,15 @@ from rich.table import Table
 
 from vibeguard import __version__
 from vibeguard.adapters import build_adapters
+from vibeguard.baseline import (
+    HISTORY_DIRNAME,
+    Baseline,
+    baseline_path,
+    latest_history,
+    load_baseline,
+    save_baseline,
+    write_history,
+)
 from vibeguard.core.config import VibeguardConfig
 from vibeguard.core.events import EventBus
 from vibeguard.core.models import (
@@ -40,11 +68,12 @@ from vibeguard.engine.orchestrator import (
     Engine,
 )
 from vibeguard.fixers.git_safety import DirtyWorktreeError, GitSafetyError, NoGitRepoError
+from vibeguard.reporting import JSON_FILENAME, write_json, write_reports
 from vibeguard.validation.engine import ValidationEngine
 
 __all__ = ["app", "main"]
 
-REPORT_FILENAME = "vibeguard-report.json"
+REPORT_FILENAME = JSON_FILENAME
 
 console = Console()
 err_console = Console(stderr=True)
@@ -65,6 +94,43 @@ class OutputFormat(str, Enum):
     JSONL = "jsonl"
     MD = "md"
     HTML = "html"
+    ALL = "all"
+
+
+DEFAULT_OUTPUT = "table,md"
+
+_OUTPUT_HELP = (
+    "Comma-separated outputs: table, json, jsonl, md, html, all. "
+    "vibeguard-report.json is always written."
+)
+
+
+class OutputError(ValueError):
+    """An ``--output`` list naming something VibeGuard cannot produce."""
+
+
+def parse_outputs(spec: str) -> set[str]:
+    """``"md, html"`` → ``{"md", "html"}``; ``"all"`` expands. Raises on nonsense."""
+    tokens = [token.strip().lower() for token in spec.split(",") if token.strip()]
+    if not tokens:
+        tokens = [OutputFormat.TABLE.value]
+    known = {fmt.value for fmt in OutputFormat}
+    unknown = [token for token in tokens if token not in known]
+    if unknown:
+        raise OutputError(
+            f"unknown output format(s): {', '.join(unknown)} — "
+            f"choose from {', '.join(sorted(known))}"
+        )
+    requested = set(tokens)
+    if OutputFormat.ALL.value in requested:
+        requested.discard(OutputFormat.ALL.value)
+        requested |= {
+            OutputFormat.TABLE.value,
+            OutputFormat.JSON.value,
+            OutputFormat.MD.value,
+            OutputFormat.HTML.value,
+        }
+    return requested
 
 
 # --------------------------------------------------------------------- helpers
@@ -105,9 +171,45 @@ def _jsonl_subscriber(name: str, payload: dict[str, Any]) -> None:
 
 
 def _write_report(report: ScanReport, root: Path) -> Path:
-    destination = root / REPORT_FILENAME
-    destination.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-    return destination
+    return write_json(report, root)
+
+
+def _emit(report: ScanReport, root: Path, outputs: set[str], events: EventBus) -> list[Path]:
+    """Write every requested report file plus the canonical JSON; print the paths."""
+    paths = write_reports(report, root, outputs, events=events)
+    for path in paths:
+        console.print(f"report written to [bold]{path}[/]")
+    return paths
+
+
+def _persist_history(report: ScanReport, root: Path, config: VibeguardConfig) -> None:
+    """Store this run so the next one can diff against it (INTERFACES.md §7).
+
+    The engine deliberately does not do this (DECISIONS.md D32): writing history is a
+    side effect of *running the tool*, not of computing a report.
+    """
+    if not config.history.enabled:
+        return
+    try:
+        write_history(report, root, keep=config.history.keep)
+    except OSError as exc:
+        err_console.print(f"[yellow]warning:[/] could not record scan history: {exc}")
+
+
+def _print_regression(report: ScanReport) -> None:
+    diff = report.regression
+    if diff is None:
+        console.print("[dim]no previous scan on record — no regression comparison.[/]")
+        return
+    console.print(
+        f"[bold]since last scan:[/] {len(diff.new)} new · {len(diff.resolved)} resolved · "
+        f"{len(diff.regressed)} regressed · {diff.unchanged} unchanged"
+    )
+    if diff.regressed:
+        console.print(
+            "[yellow]regressed:[/] " + ", ".join(diff.regressed[:10]) + " — previously "
+            "resolved, back again"
+        )
 
 
 def _severity_style(severity: Severity) -> str:
@@ -293,21 +395,24 @@ def audit(
     local_only: Annotated[
         bool, typer.Option("--local-only", help="Never send code off this machine.")
     ] = False,
-    output: Annotated[
-        OutputFormat, typer.Option("--output", "-o", help="Output format.")
-    ] = OutputFormat.TABLE,
+    output: Annotated[str, typer.Option("--output", "-o", help=_OUTPUT_HELP)] = DEFAULT_OUTPUT,
 ) -> None:
-    """Audit a repository (read-only) and write vibeguard-report.json."""
+    """Audit a repository (read-only) and write the report files."""
     root = path.resolve()
+    try:
+        outputs = parse_outputs(output)
+    except OutputError as exc:
+        err_console.print(f"[red]error:[/] {exc}")
+        raise typer.Exit(EXIT_ERROR) from exc
+
     config = _load_config(root, packs=packs, local_only=local_only or None)
     events = EventBus()
-    if output is OutputFormat.JSONL:
+    if OutputFormat.JSONL.value in outputs:
         events.subscribe("*", _jsonl_subscriber)
 
     try:
         engine = Engine(config, events=events)
         report = engine.audit(root)
-        destination = _write_report(report, root)
     except NotADirectoryError as exc:
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
@@ -315,17 +420,14 @@ def audit(
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
 
-    events.emit("report.generated", path=str(destination), format=output.value)
-
-    if output is OutputFormat.JSON:
-        console.print_json(report.model_dump_json())
-    elif output is OutputFormat.TABLE:
+    if OutputFormat.TABLE.value in outputs:
         _print_summary(report)
-        console.print(f"\nreport written to [bold]{destination}[/]")
-    elif output in {OutputFormat.MD, OutputFormat.HTML}:
-        console.print(
-            f"{output.value} rendering lands in M4; JSON report written to {destination}"
-        )
+        _print_regression(report)
+        console.print()
+    if OutputFormat.JSON.value in outputs:
+        console.print_json(report.model_dump_json())
+    _emit(report, root, outputs, events)
+    _persist_history(report, root, config)
     if deep:
         _print_checklist_detail(report)
 
@@ -349,6 +451,7 @@ def fix(
     ] = False,
     local_only: Annotated[bool, typer.Option("--local-only")] = False,
     allow_no_git: Annotated[bool, typer.Option("--allow-no-git")] = False,
+    output: Annotated[str, typer.Option("--output", "-o", help=_OUTPUT_HELP)] = DEFAULT_OUTPUT,
 ) -> None:
     """Repair findings on a dedicated branch, validating every change."""
     if safe and interactive:
@@ -362,6 +465,11 @@ def fix(
         )
 
     root = path.resolve()
+    try:
+        outputs = parse_outputs(output)
+    except OutputError as exc:
+        err_console.print(f"[red]error:[/] {exc}")
+        raise typer.Exit(EXIT_ERROR) from exc
     config = _load_config(
         root,
         local_only=local_only or None,
@@ -392,7 +500,6 @@ def fix(
                 ),
             )
             scan_report = engine.fix(root, mode, confirm=_confirm_fix)  # type: ignore[arg-type]
-        destination = _write_report(scan_report, root)
     except DirtyWorktreeError as exc:
         err_console.print(f"[red]refusing to run:[/] {exc}")
         raise typer.Exit(EXIT_DIRTY_WORKTREE) from exc
@@ -403,9 +510,11 @@ def fix(
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
 
-    events.emit("report.generated", path=str(destination), format="json")
     _print_fix_summary(scan_report, engine)
-    console.print(f"\nreport written to [bold]{destination}[/]")
+    _print_regression(scan_report)
+    console.print()
+    _emit(scan_report, root, outputs, events)
+    _persist_history(scan_report, root, config)
     raise typer.Exit(EXIT_OK)
 
 
@@ -480,26 +589,61 @@ def _print_fix_summary(report: ScanReport, engine: Engine) -> None:
     _print_checklist(report)
 
 
+def _load_last_report(root: Path) -> tuple[ScanReport, str] | None:
+    """The most recent stored scan: history first, then ``vibeguard-report.json``."""
+    stored = latest_history(root)
+    if stored is not None:
+        return stored, f".vibeguard/{HISTORY_DIRNAME}/"
+    destination = root / REPORT_FILENAME
+    if not destination.is_file():
+        return None
+    try:
+        return (
+            ScanReport.model_validate_json(destination.read_text(encoding="utf-8")),
+            str(destination),
+        )
+    except (OSError, ValueError):
+        return None
+
+
 @app.command()
 def report(
     path: Annotated[Path, typer.Argument(help="Repository whose last scan to render.")] = Path("."),
+    output: Annotated[str, typer.Option("--output", "-o", help=_OUTPUT_HELP)] = DEFAULT_OUTPUT,
 ) -> None:
-    """Re-render the last scan from ``vibeguard-report.json``."""
-    destination = path.resolve() / REPORT_FILENAME
-    if not destination.is_file():
+    """Re-render the last recorded scan — no rescan, no repository access.
+
+    Reads the newest ``.vibeguard/history/`` entry (falling back to
+    ``vibeguard-report.json``) and renders it to the requested formats.
+    """
+    root = path.resolve()
+    try:
+        outputs = parse_outputs(output)
+    except OutputError as exc:
+        err_console.print(f"[red]error:[/] {exc}")
+        raise typer.Exit(EXIT_ERROR) from exc
+
+    loaded = _load_last_report(root)
+    if loaded is None:
         err_console.print(
-            f"[red]no {REPORT_FILENAME} found[/] at {destination} — run "
-            "[bold]vibeguard audit[/] first."
+            f"[red]no recorded scan[/] under {root} — neither .vibeguard/{HISTORY_DIRNAME}/ "
+            f"nor {REPORT_FILENAME} holds a readable report. Run [bold]vibeguard audit[/] "
+            "first."
         )
         raise typer.Exit(EXIT_ERROR)
-    try:
-        stored = ScanReport.model_validate_json(destination.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        err_console.print(f"[red]error:[/] {destination} is not a readable VibeGuard report")
-        raise typer.Exit(EXIT_ERROR) from exc
-    console.print(f"[dim]{stored.mode} scan of {stored.repo} at {stored.scan_date}[/]")
-    _print_summary(stored)
-    console.print("[dim]markdown and HTML rendering land in M4.[/]")
+    stored, source = loaded
+
+    console.print(
+        f"[dim]re-rendering the {stored.mode} scan of {stored.repo} from "
+        f"{stored.scan_date.isoformat(timespec='seconds')} (source: {source})[/]"
+    )
+    if OutputFormat.TABLE.value in outputs:
+        _print_summary(stored)
+        _print_regression(stored)
+        console.print()
+    if OutputFormat.JSON.value in outputs:
+        console.print_json(stored.model_dump_json())
+    _emit(stored, root, outputs, EventBus())
     raise typer.Exit(EXIT_OK)
 
 
@@ -510,51 +654,94 @@ def ci(
         Severity | None, typer.Option("--fail-on", help="Minimum severity that fails CI.")
     ] = None,
     baseline: Annotated[
-        bool, typer.Option("--baseline/--no-baseline", help="Use the stored baseline (M4).")
+        bool,
+        typer.Option(
+            "--baseline/--no-baseline",
+            help="Exempt findings in .vibeguard/baseline.json from the gate.",
+        ),
     ] = True,
-    output: Annotated[
-        OutputFormat, typer.Option("--output", "-o", help="Output format.")
-    ] = OutputFormat.TABLE,
+    output: Annotated[str, typer.Option("--output", "-o", help=_OUTPUT_HELP)] = DEFAULT_OUTPUT,
 ) -> None:
     """Run an audit and fail when findings reach the configured threshold."""
     root = path.resolve()
+    try:
+        outputs = parse_outputs(output)
+    except OutputError as exc:
+        err_console.print(f"[red]error:[/] {exc}")
+        raise typer.Exit(EXIT_ERROR) from exc
+
     config = _load_config(root, fail_on=fail_on, use_baseline=baseline)
     events = EventBus()
-    if output is OutputFormat.JSONL:
+    if OutputFormat.JSONL.value in outputs:
         events.subscribe("*", _jsonl_subscriber)
 
     try:
         engine = Engine(config, events=events)
         scan_report, exit_code = engine.ci(root)
-        destination = _write_report(scan_report, root)
     except Exception as exc:
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
 
-    events.emit("report.generated", path=str(destination), format=output.value)
-
-    if output is OutputFormat.JSON:
-        console.print_json(scan_report.model_dump_json())
-    elif output is OutputFormat.TABLE:
+    if OutputFormat.TABLE.value in outputs:
         _print_summary(scan_report)
-        console.print(f"\nreport written to [bold]{destination}[/]")
+    if OutputFormat.JSON.value in outputs:
+        console.print_json(scan_report.model_dump_json())
+    _emit(scan_report, root, outputs, events)
+    _persist_history(scan_report, root, config)
 
+    console.print()
+    _print_regression(scan_report)
+    gating = engine.gating_findings(scan_report)
+    exempt = sum(1 for f in scan_report.findings if f.suppressed or f.baselined)
     threshold = config.ci.fail_on.value
+    if exempt:
+        console.print(
+            f"[dim]{exempt} finding(s) exempt from the gate (suppressed or baselined).[/]"
+        )
     if exit_code == EXIT_FINDINGS:
-        err_console.print(f"[red]CI gate failed:[/] findings at or above '{threshold}'.")
+        breaching = sum(1 for f in gating if f.severity.order >= config.ci.fail_on.order)
+        err_console.print(
+            f"[red]CI gate failed:[/] {breaching} finding(s) at or above '{threshold}'."
+        )
     else:
         console.print(f"[green]CI gate passed:[/] no findings at or above '{threshold}'.")
-    if config.ci.use_baseline:
-        console.print("[dim]baseline comparison lands in M4.[/]")
     raise typer.Exit(exit_code)
 
 
 @baseline_app.command("create")
 def baseline_create(
     path: Annotated[Path, typer.Argument()] = Path("."),
+    packs: Annotated[
+        list[str] | None, typer.Option("--packs", help="Restrict to these rule packs.")
+    ] = None,
+    local_only: Annotated[bool, typer.Option("--local-only")] = False,
 ) -> None:
-    """Record current findings as the accepted baseline (M4)."""
-    console.print("[yellow]baseline create is not yet implemented[/] (M4).")
+    """Scan, then record every open finding as the accepted baseline.
+
+    The baseline is a scheduling decision, not an erasure: baselined findings stay in
+    every report, keep counting towards the score, and only stop failing CI.
+    """
+    root = path.resolve()
+    config = _load_config(root, packs=packs, local_only=local_only or None)
+    try:
+        scan = Engine(config).audit(root, mode="baseline")
+        destination = save_baseline(root, scan)
+    except NotADirectoryError as exc:
+        err_console.print(f"[red]error:[/] {exc}")
+        raise typer.Exit(EXIT_ERROR) from exc
+    except OSError as exc:
+        err_console.print(f"[red]error:[/] could not write the baseline: {exc}")
+        raise typer.Exit(EXIT_ERROR) from exc
+
+    stored = load_baseline(root)
+    count = len(stored.fingerprints) if stored else 0
+    console.print(
+        f"baseline written to [bold]{destination}[/] — {count} fingerprint(s) accepted."
+    )
+    console.print(
+        "[dim]These findings no longer fail `vibeguard ci`. They are still detected, "
+        "still scored, and still printed in every report.[/]"
+    )
     raise typer.Exit(EXIT_OK)
 
 
@@ -562,12 +749,29 @@ def baseline_create(
 def baseline_show(
     path: Annotated[Path, typer.Argument()] = Path("."),
 ) -> None:
-    """Show the stored baseline (M4)."""
-    baseline_path = path.resolve() / ".vibeguard" / "baseline.json"
-    if baseline_path.is_file():
-        console.print_json(baseline_path.read_text(encoding="utf-8"))
-    else:
-        console.print(f"[yellow]no baseline at[/] {baseline_path} (baselines land in M4).")
+    """Show the stored baseline."""
+    root = path.resolve()
+    destination = baseline_path(root)
+    stored: Baseline | None = load_baseline(root)
+    if stored is None:
+        if destination.is_file():
+            err_console.print(f"[red]baseline at {destination} is not readable.[/]")
+            raise typer.Exit(EXIT_ERROR)
+        console.print(
+            f"[yellow]no baseline at[/] {destination} — create one with "
+            "[bold]vibeguard baseline create[/]."
+        )
+        raise typer.Exit(EXIT_OK)
+
+    table = Table(title=f"baseline · {destination}")
+    table.add_column("field", style="bold")
+    table.add_column("value")
+    table.add_row("created", stored.created.isoformat(timespec="seconds"))
+    table.add_row("head sha", stored.head_sha or "— (not a git repository)")
+    table.add_row("fingerprints", str(len(stored.fingerprints)))
+    console.print(table)
+    for fingerprint in stored.fingerprints:
+        console.print(f"  [dim]{fingerprint}[/]")
     raise typer.Exit(EXIT_OK)
 
 
