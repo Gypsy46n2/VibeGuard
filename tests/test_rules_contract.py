@@ -11,8 +11,8 @@ import re
 from pathlib import Path
 
 import pytest
-from conftest import context_from
 
+from conftest import context_from
 from vibeguard.adapters import build_adapters
 from vibeguard.core.models import AutofixSafety, Category, Confidence, ScaleClass, Severity
 from vibeguard.core.registry import BUILTIN_PACKS, build_registry
@@ -35,43 +35,62 @@ def test_the_pack_set_is_populated():
     assert len(RULES) >= 55, f"only {len(RULES)} rules registered"
 
 
-@pytest.mark.parametrize("entry", RULES, ids=lambda e: e.id)
-def test_rule_id_format(entry):
-    assert ID_RE.match(entry.id), entry.id
+def test_rule_ids_are_well_formed():
+    bad = [entry.id for entry in RULES if not ID_RE.match(entry.id)]
+    assert not bad, f"rule ids outside the INTERFACES.md §3 format: {bad}"
 
 
 def test_rule_ids_are_unique():
     assert len(IDS) == len(set(IDS))
 
 
-@pytest.mark.parametrize("entry", RULES, ids=lambda e: e.id)
-def test_rule_metadata_is_complete(entry):
-    cls = entry.cls
-    assert isinstance(cls.category, Category)
-    assert isinstance(cls.severity, Severity)
-    assert isinstance(cls.confidence, Confidence)
-    assert isinstance(cls.min_scale, ScaleClass)
-    assert isinstance(cls.autofix_safety, AutofixSafety)
-    assert cls.title and not cls.title.endswith("."), cls.id
-    assert len(cls.description) > 20, cls.id
-    assert len(cls.why_it_matters) > 60, f"{cls.id}: why_it_matters must explain the stakes"
-    assert cls.references, f"{cls.id}: needs at least one reference"
-    for url in cls.references:
-        assert url.startswith("http"), f"{cls.id}: {url!r}"
+def _metadata_problems(cls) -> list[str]:
+    problems: list[str] = []
+    if not isinstance(cls.category, Category):
+        problems.append("category is not a Category")
+    if not isinstance(cls.severity, Severity):
+        problems.append("severity is not a Severity")
+    if not isinstance(cls.confidence, Confidence):
+        problems.append("confidence is not a Confidence")
+    if not isinstance(cls.min_scale, ScaleClass):
+        problems.append("min_scale is not a ScaleClass")
+    if not isinstance(cls.autofix_safety, AutofixSafety):
+        problems.append("autofix_safety is not an AutofixSafety")
+    if not cls.title or cls.title.endswith("."):
+        problems.append("title must be a non-empty phrase with no trailing period")
+    if len(cls.description) <= 20:
+        problems.append("description is too short to be specific")
+    if len(cls.why_it_matters) <= 60:
+        problems.append("why_it_matters must explain the stakes")
+    if not cls.references:
+        problems.append("needs at least one reference")
+    problems += [f"reference {url!r} is not a URL" for url in cls.references
+                 if not url.startswith("http")]
+    return problems
 
 
-@pytest.mark.parametrize("entry", RULES, ids=lambda e: e.id)
-def test_rule_topics_are_declared_and_valid(entry):
-    cls = entry.cls
-    assert cls.topics, f"{cls.id} declares no checklist topics"
-    unknown = set(cls.topics) - set(topic_ids())
-    assert not unknown, f"{cls.id} claims topics absent from topics.yaml: {sorted(unknown)}"
+def test_rule_metadata_is_complete():
+    failures = {entry.id: _metadata_problems(entry.cls) for entry in RULES}
+    broken = {rule_id: issues for rule_id, issues in failures.items() if issues}
+    assert not broken, f"incomplete rule metadata: {broken}"
 
 
-@pytest.mark.parametrize("entry", RULES, ids=lambda e: e.id)
-def test_fix_is_a_stub_until_m3(entry):
+def test_rule_topics_are_declared_and_valid():
+    known = set(topic_ids())
+    undeclared = [entry.id for entry in RULES if not entry.cls.topics]
+    assert not undeclared, f"rules declaring no checklist topics: {undeclared}"
+    unknown = {
+        entry.id: sorted(set(entry.cls.topics) - known)
+        for entry in RULES
+        if set(entry.cls.topics) - known
+    }
+    assert not unknown, f"rules claiming topics absent from topics.yaml: {unknown}"
+
+
+def test_fix_is_a_stub_until_m3():
     """M3 owns repairs: no built-in rule may return a Patch yet."""
-    assert entry.cls.fix is Rule.fix, f"{entry.id} overrides fix() — that lands in M3"
+    overriding = [entry.id for entry in RULES if entry.cls.fix is not Rule.fix]
+    assert not overriding, f"rules overriding fix() before M3: {overriding}"
 
 
 def test_adapter_topics_are_valid():
@@ -138,25 +157,36 @@ def hostile_ctx(tmp_path_factory):
     return context_from(root, HOSTILE_FILES)
 
 
-@pytest.mark.parametrize("entry", RULES, ids=lambda e: e.id)
-def test_no_rule_crashes_on_hostile_input(entry, hostile_ctx):
-    rule = entry.cls()
-    if not rule.applicable(hostile_ctx):
-        return
-    findings = rule.detect(hostile_ctx)
-    assert isinstance(findings, list)
-    for finding in findings:
-        assert finding.rule_id == entry.id
-        assert finding.fingerprint
+def test_no_rule_crashes_on_hostile_input(hostile_ctx):
+    crashed: dict[str, str] = {}
+    for entry in RULES:
+        rule = entry.cls()
+        try:
+            if not rule.applicable(hostile_ctx):
+                continue
+            findings = rule.detect(hostile_ctx)
+        except Exception as exc:  # noqa: BLE001 - the point of the test
+            crashed[entry.id] = f"{type(exc).__name__}: {exc}"
+            continue
+        assert isinstance(findings, list), entry.id
+        for finding in findings:
+            assert finding.rule_id == entry.id
+            assert finding.fingerprint
+    assert not crashed, f"rules raised on hostile input: {crashed}"
 
 
-@pytest.mark.parametrize("entry", RULES, ids=lambda e: e.id)
-def test_no_rule_crashes_on_an_empty_repository(entry, tmp_path_factory):
+def test_no_rule_crashes_on_an_empty_repository(tmp_path_factory):
     root = tmp_path_factory.mktemp("empty")
     ctx = context_from(root, {"README.md": "# nothing here\n"})
-    rule = entry.cls()
-    if rule.applicable(ctx):
-        assert isinstance(rule.detect(ctx), list)
+    crashed: dict[str, str] = {}
+    for entry in RULES:
+        rule = entry.cls()
+        try:
+            if rule.applicable(ctx):
+                assert isinstance(rule.detect(ctx), list), entry.id
+        except Exception as exc:  # noqa: BLE001 - the point of the test
+            crashed[entry.id] = f"{type(exc).__name__}: {exc}"
+    assert not crashed, f"rules raised on an empty repository: {crashed}"
 
 
 def test_rules_do_not_report_on_their_own_test_fixtures(tmp_path: Path):

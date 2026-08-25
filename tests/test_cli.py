@@ -78,10 +78,20 @@ def test_audit_missing_path_exits_with_execution_error(tmp_path: Path):
     assert result.exit_code == 2
 
 
-def test_ci_passes_below_threshold(repo: Path):
-    result = runner.invoke(app, ["ci", str(repo)])
+def test_ci_passes_below_threshold(tmp_path: Path):
+    """A clean project passes the gate and says so."""
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    (clean / "README.md").write_text("# nothing to audit here\n", encoding="utf-8")
+    result = runner.invoke(app, ["ci", str(clean), "--fail-on", "critical"])
     assert result.exit_code == 0
     assert "CI gate passed" in result.stdout
+
+
+def test_ci_reports_the_gate_failure_on_the_vulnerable_fixture(repo: Path):
+    result = runner.invoke(app, ["ci", str(repo), "--fail-on", "high"])
+    assert result.exit_code == 1
+    assert "CI gate failed" in result.stdout + result.stderr
 
 
 def test_ci_fails_at_threshold(repo: Path):
