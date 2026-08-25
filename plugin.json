@@ -35,6 +35,12 @@
         "argv": ["vibeguard", "report", "{path}", "--output", "html"],
         "description": "Re-render the last recorded scan without rescanning.",
         "writes": true
+      },
+      {
+        "name": "graph",
+        "argv": ["vibeguard", "graph", "{path}", "--format", "mermaid"],
+        "description": "Print the inferred architecture as mermaid or SVG. Discovery only, no rules.",
+        "writes": false
       }
     ]
   },
