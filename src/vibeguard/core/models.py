@@ -18,6 +18,8 @@ __all__ = [
     "AutofixSafety",
     "Category",
     "CategoryScore",
+    "ChecklistItem",
+    "ChecklistStatus",
     "Confidence",
     "Evidence",
     "FileEdit",
@@ -146,6 +148,16 @@ _SEVERITY_ORDER.update(
         Severity.CRITICAL: 4,
     }
 )
+
+
+class ChecklistStatus(str, Enum):
+    """Status of one master-checklist topic — INTERFACES.md §11."""
+
+    PASS = "pass"
+    FAIL = "fail"
+    FIXED = "fixed"
+    REVIEW_REQUIRED = "review_required"
+    NOT_APPLICABLE = "not_applicable"
 
 
 class SuppressionReason(str, Enum):
@@ -340,6 +352,22 @@ class CategoryScore(BaseModel):
     finding_count: int
 
 
+class ChecklistItem(BaseModel):
+    """One master-checklist topic and its resolved status — INTERFACES.md §11."""
+
+    topic_id: str
+    section: str
+    name: str
+    category: Category
+    status: ChecklistStatus
+    detectors: list[str] = Field(default_factory=list)
+    technologies: list[str] = Field(default_factory=list)
+    finding_ids: list[str] = Field(default_factory=list)
+    fixes: list[str] = Field(default_factory=list)
+    validation: str = ""
+    note: str = ""
+
+
 class ScanReport(BaseModel):
     schema_version: Literal["1"] = "1"
     repo: str
@@ -350,6 +378,7 @@ class ScanReport(BaseModel):
     scale: ScaleProfile
     graph: ArchitectureGraph
     findings: list[Finding] = Field(default_factory=list)
+    checklist: list[ChecklistItem] = Field(default_factory=list)
     scores_before: list[CategoryScore] = Field(default_factory=list)
     scores_after: list[CategoryScore] | None = None
     overall_before: int = 100

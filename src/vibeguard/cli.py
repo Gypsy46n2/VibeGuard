@@ -17,10 +17,12 @@ from rich.console import Console
 from rich.table import Table
 
 from vibeguard import __version__
+from vibeguard.adapters import build_adapters
 from vibeguard.core.config import VibeguardConfig
 from vibeguard.core.events import EventBus
-from vibeguard.core.models import Category, ScanReport, Severity
+from vibeguard.core.models import Category, ChecklistStatus, ScanReport, Severity
 from vibeguard.core.registry import build_registry
+from vibeguard.engine.checklist import section_rollup
 from vibeguard.engine.orchestrator import (
     EXIT_ERROR,
     EXIT_FINDINGS,
@@ -31,18 +33,6 @@ from vibeguard.engine.orchestrator import (
 __all__ = ["app", "main"]
 
 REPORT_FILENAME = "vibeguard-report.json"
-
-#: Adapters planned for M2; availability is probed on PATH / importability.
-KNOWN_ADAPTERS: tuple[tuple[str, str], ...] = (
-    ("bandit", "command"),
-    ("detect-secrets", "command"),
-    ("pip-audit", "command"),
-    ("semgrep", "command"),
-    ("checkov", "command"),
-    ("trivy", "command"),
-    ("hadolint", "command"),
-    ("npm", "command"),
-)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -121,6 +111,47 @@ def _severity_style(severity: Severity) -> str:
     }[severity]
 
 
+_CHECKLIST_STYLE: dict[ChecklistStatus, str] = {
+    ChecklistStatus.PASS: "green",
+    ChecklistStatus.FAIL: "red",
+    ChecklistStatus.FIXED: "bold green",
+    ChecklistStatus.REVIEW_REQUIRED: "yellow",
+    ChecklistStatus.NOT_APPLICABLE: "dim",
+}
+
+
+def _print_checklist(report: ScanReport) -> None:
+    """Per-section rollup of the master audit checklist (INTERFACES.md §11)."""
+    if not report.checklist:
+        return
+    rollup = section_rollup(report.checklist)
+    table = Table(
+        title=f"Master audit checklist ({len(report.checklist)} topics across {len(rollup)} "
+        "sections)"
+    )
+    table.add_column("section")
+    for status in ChecklistStatus:
+        table.add_column(status.value, justify="right")
+    totals = dict.fromkeys(ChecklistStatus, 0)
+    for section, counts in rollup:
+        row = [section]
+        for status in ChecklistStatus:
+            count = counts[status]
+            totals[status] += count
+            row.append(f"[{_CHECKLIST_STYLE[status]}]{count}[/]" if count else "[dim]·[/]")
+        table.add_row(*row)
+    table.add_row(
+        "[bold]all[/]",
+        *[f"[bold]{totals[status]}[/]" for status in ChecklistStatus],
+    )
+    console.print()
+    console.print(table)
+    console.print(
+        "[dim]review_required includes topics with no automated detector yet — never "
+        "silently passed.[/]"
+    )
+
+
 def _print_summary(report: ScanReport) -> None:
     stack = Table(title="Detected stack", show_header=False, box=None, pad_edge=False)
     stack.add_column("field", style="bold")
@@ -169,6 +200,8 @@ def _print_summary(report: ScanReport) -> None:
             continue
         scores.add_row(score.category.value, str(score.score), str(score.finding_count))
     console.print(scores)
+
+    _print_checklist(report)
 
     if report.findings:
         console.print()
@@ -408,17 +441,43 @@ def doctor() -> None:
     except ImportError:  # pragma: no cover - tree-sitter is a core dep
         table.add_row("tree-sitter", "[yellow]missing[/]", "AST rules degrade to regex")
 
-    for name, _kind in KNOWN_ADAPTERS:
-        found = shutil.which(name)
+    for adapter in build_adapters():
+        available = adapter.available()
+        detail_bits: list[str] = []
+        location = shutil.which(adapter.command) if adapter.command else None
+        if available and location:
+            detail_bits.append(location)
+            version = _probe_version(adapter.command)
+            if version:
+                detail_bits.append(version)
+        elif not available:
+            detail_bits.append("optional — install with the [scanners] extra")
+        if adapter.requires_network:
+            detail_bits.append("network required (skipped under --local-only)")
         table.add_row(
-            f"adapter: {name}",
-            "[green]available[/]" if found else "[dim]not installed[/]",
-            found or "optional — install with the [scanners] extra",
+            f"adapter: {adapter.name}",
+            "[green]available[/]" if available else "[dim]not installed[/]",
+            " · ".join(detail_bits) or adapter.description,
         )
 
     console.print(table)
-    console.print("[dim]adapters are wired into the pipeline in M2.[/]")
+    console.print(
+        "[dim]adapters are optional; VibeGuard's built-in rules run with zero external "
+        "installs.[/]"
+    )
     raise typer.Exit(EXIT_OK)
+
+
+def _probe_version(command: str) -> str:
+    """Best-effort ``<tool> --version`` probe; empty string when it does not answer."""
+    try:
+        proc = subprocess.run(
+            [command, "--version"], capture_output=True, text=True, timeout=15, check=False
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - environment specific
+        return ""
+    output = (proc.stdout or proc.stderr or "").strip().splitlines()
+    return output[0][:60] if output else ""
 
 
 @app.command("rules")

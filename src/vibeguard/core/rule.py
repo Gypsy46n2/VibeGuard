@@ -40,6 +40,8 @@ class Rule(ABC):
     why_it_matters: ClassVar[str]
     references: ClassVar[list[str]] = []
     technologies: ClassVar[set[str]] = set()
+    #: Master-checklist topic ids this rule evaluates (INTERFACES.md §11).
+    topics: ClassVar[set[str]] = set()
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.MANUAL_CHANGE_REQUIRED
     requires_ai: ClassVar[bool] = False

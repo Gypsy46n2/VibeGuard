@@ -12,10 +12,13 @@ from pathlib import Path
 from typing import Literal
 
 from vibeguard import __version__
+from vibeguard.adapters import ToolAdapter, build_adapters
 from vibeguard.core.config import VibeguardConfig
 from vibeguard.core.events import EventBus
+from vibeguard.core.fingerprint import normalize
 from vibeguard.core.models import (
     Category,
+    ChecklistItem,
     Finding,
     ScanReport,
     Severity,
@@ -27,6 +30,7 @@ from vibeguard.discovery.files import collect_files
 from vibeguard.discovery.graph import build_graph
 from vibeguard.discovery.scale import detect_scale
 from vibeguard.discovery.tech import detect_tech
+from vibeguard.engine.checklist import DetectorInfo, derive_checklist
 from vibeguard.reporting.scoring import score_findings
 
 __all__ = ["Engine", "EXIT_OK", "EXIT_FINDINGS", "EXIT_ERROR", "EXIT_DIRTY_WORKTREE"]
@@ -50,10 +54,12 @@ class Engine:
         *,
         events: EventBus | None = None,
         registry: RuleRegistry | None = None,
+        adapters: list[ToolAdapter] | None = None,
     ) -> None:
         self.config = config or VibeguardConfig()
         self.events = events or EventBus()
         self._registry = registry
+        self._adapters = adapters
 
     # ------------------------------------------------------------- registry
     @property
@@ -61,6 +67,12 @@ class Engine:
         if self._registry is None:
             self._registry = build_registry(self.config.packs)
         return self._registry
+
+    @property
+    def adapters(self) -> list[ToolAdapter]:
+        if self._adapters is None:
+            self._adapters = build_adapters()
+        return self._adapters
 
     # ------------------------------------------------------------- discovery
     def build_context(self, path: str | Path) -> ScanContext:
@@ -132,6 +144,53 @@ class Engine:
                 self.events.emit("scan.issue_found", finding=finding.model_dump(mode="json"))
         return findings
 
+    # -------------------------------------------------------------- adapters
+    def _gate_reason(self, rule: Rule, ctx: ScanContext) -> str:
+        """Why ``rule`` did not apply — surfaced in NOT_APPLICABLE checklist notes."""
+        if ctx.scale.scale.order < rule.min_scale.order:
+            return f"requires scale >= {rule.min_scale.value} (project is {ctx.scale.scale.value})"
+        if rule.technologies and not ({t.lower() for t in rule.technologies}
+                                      & ctx.tech.all_technologies()):
+            return "requires " + "/".join(sorted(rule.technologies)) + " (not detected)"
+        return "rule preconditions not met in this repository"
+
+    def _run_adapters(self, ctx: ScanContext) -> tuple[list[Finding], list[str], list[ToolAdapter]]:
+        """Run every applicable, available adapter. Returns (findings, log, ran)."""
+        findings: list[Finding] = []
+        used: list[str] = []
+        ran: list[ToolAdapter] = []
+        for adapter in self.adapters:
+            try:
+                if not adapter.applicable(ctx):
+                    continue
+                skip = adapter.skip_reason(ctx)
+                if skip:
+                    used.append(f"{adapter.name} (skipped: {skip})")
+                    continue
+                if not adapter.available():
+                    used.append(f"{adapter.name} (skipped: not installed)")
+                    continue
+            except Exception:
+                log.warning("adapter %s failed its preflight (skipped)", adapter.name,
+                            exc_info=True)
+                used.append(f"{adapter.name} (skipped: preflight error)")
+                continue
+
+            self.events.emit("scan.stage", stage=f"adapter:{adapter.name}")
+            try:
+                produced = adapter.run(ctx) or []
+            except Exception:  # pragma: no cover - adapters must never crash a scan
+                log.warning("adapter %s raised during run (skipped)", adapter.name, exc_info=True)
+                used.append(f"{adapter.name} (skipped: run error)")
+                continue
+            ran.append(adapter)
+            valid = [f for f in produced if isinstance(f, Finding)]
+            used.append(f"{adapter.name} ({len(valid)} finding(s))")
+            for finding in valid:
+                self.events.emit("scan.issue_found", finding=finding.model_dump(mode="json"))
+            findings.extend(valid)
+        return findings, used, ran
+
     @staticmethod
     def _dedup(findings: list[Finding]) -> list[Finding]:
         """Drop duplicate fingerprints, keeping the first occurrence."""
@@ -144,6 +203,89 @@ class Engine:
             unique.append(finding)
         return unique
 
+    @staticmethod
+    def _merge_adapter_findings(
+        builtin: list[Finding], external: list[Finding]
+    ) -> list[Finding]:
+        """Merge adapter findings into built-ins, preferring ours.
+
+        Fingerprints embed the rule id, so a built-in and an adapter never share one.
+        Cross-tool duplicates are matched on ``(file, normalised snippet)`` instead:
+        the built-in finding is kept and annotated with the corroborating tool.
+        """
+        index: dict[tuple[str, str], Finding] = {}
+        for finding in builtin:
+            for evidence in finding.evidence:
+                if evidence.snippet:
+                    index.setdefault((evidence.file, normalize(evidence.snippet)), finding)
+
+        merged = list(builtin)
+        for finding in external:
+            key: tuple[str, str] | None = None
+            for evidence in finding.evidence:
+                if evidence.snippet:
+                    key = (evidence.file, normalize(evidence.snippet))
+                    break
+            existing = index.get(key) if key else None
+            if existing is None:
+                merged.append(finding)
+                continue
+            tool = finding.rule_id.split("-")[2] if finding.rule_id.count("-") >= 2 else "adapter"
+            note = f"corroborated by {tool} ({finding.rule_id})"
+            if note not in (existing.recommended_followup, ""):
+                for evidence in existing.evidence:
+                    if note not in evidence.note:
+                        evidence.note = f"{evidence.note}; {note}".lstrip("; ")
+                        break
+        return merged
+
+    # ------------------------------------------------------------- checklist
+    def _detectors(
+        self,
+        ctx: ScanContext,
+        rules: list[Rule],
+        applicable: list[Rule],
+        adapters_ran: list[ToolAdapter],
+    ) -> list[DetectorInfo]:
+        applicable_ids = {rule.id for rule in applicable}
+        infos: list[DetectorInfo] = []
+        for rule in rules:
+            is_applicable = rule.id in applicable_ids
+            infos.append(
+                DetectorInfo(
+                    key=rule.id,
+                    topics=frozenset(rule.topics),
+                    technologies=tuple(sorted(rule.technologies)),
+                    applicable=is_applicable,
+                    reason="" if is_applicable else self._gate_reason(rule, ctx),
+                )
+            )
+        ran = {adapter.name for adapter in adapters_ran}
+        for adapter in self.adapters:
+            infos.append(
+                DetectorInfo(
+                    key=adapter.name,
+                    topics=frozenset(adapter.topics),
+                    technologies=tuple(sorted(adapter.technologies)),
+                    applicable=adapter.name in ran,
+                    reason="" if adapter.name in ran else f"{adapter.name} did not run",
+                    rule_id_prefix=f"VG-EXT-{adapter.name}-",
+                )
+            )
+        return infos
+
+    def build_checklist(
+        self,
+        ctx: ScanContext,
+        rules: list[Rule],
+        applicable: list[Rule],
+        adapters_ran: list[ToolAdapter],
+        findings: list[Finding],
+    ) -> list[ChecklistItem]:
+        """Derive the full master checklist (INTERFACES.md §11) with its self-check."""
+        detectors = self._detectors(ctx, rules, applicable, adapters_ran)
+        return derive_checklist(detectors, findings)
+
     # ----------------------------------------------------------------- audit
     def audit(self, path: str | Path, *, mode: str = "audit") -> ScanReport:
         """Full read-only pipeline; never writes to the target repository."""
@@ -152,11 +294,22 @@ class Engine:
 
         ctx = self.build_context(root)
         self.events.emit("scan.stage", stage="rule_selection")
+        all_rules = self.registry.instantiate()
         rules = self.select_rules(ctx)
         applicable_categories = {rule.category for rule in rules}
 
         self.events.emit("scan.stage", stage="detection")
         findings = self._dedup(self._detect(ctx, rules))
+
+        self.events.emit("scan.stage", stage="adapters")
+        external, adapters_used, adapters_ran = self._run_adapters(ctx)
+        findings = self._dedup(self._merge_adapter_findings(findings, self._dedup(external)))
+        applicable_categories |= {f.category for f in external}
+
+        # M3 seam: the repair loop runs here, attaching FixRecords to findings, and the
+        # checklist below then reports FIXED topics with their validation evidence.
+        self.events.emit("scan.stage", stage="checklist")
+        checklist = self.build_checklist(ctx, all_rules, rules, adapters_ran, findings)
 
         self.events.emit("scan.stage", stage="scoring")
         scores, overall = score_findings(findings, applicable_categories)
@@ -171,13 +324,14 @@ class Engine:
             scale=ctx.scale,
             graph=ctx.graph,
             findings=findings,
+            checklist=checklist,
             scores_before=scores,
             scores_after=None,
             overall_before=overall,
             overall_after=None,
             counts=counts,
             regression=None,
-            adapters_used=[],
+            adapters_used=adapters_used,
             validators_used=[],
             ai_used=False,
             local_only=self.config.local_only or self.config.ai.provider == "null",

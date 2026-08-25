@@ -61,6 +61,12 @@ Homepage = "https://github.com/vibeguard/vibeguard"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vibeguard"]
+# topics.yaml is the authoritative checklist registry (INTERFACES.md §11) and must
+# ship inside the wheel; the engine reads it via importlib.resources.
+artifacts = ["src/vibeguard/rules/topics.yaml"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/vibeguard", "tests", "docs", "README.md", "pyproject.toml"]
 
 [tool.ruff]
 line-length = 100
