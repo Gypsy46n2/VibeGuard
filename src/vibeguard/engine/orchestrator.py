@@ -7,6 +7,7 @@ M1 implements audit and ci; fix arrives in M3.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -20,6 +21,7 @@ from vibeguard.core.models import (
     Category,
     ChecklistItem,
     Finding,
+    FixStatus,
     ScanReport,
     Severity,
 )
@@ -31,7 +33,10 @@ from vibeguard.discovery.graph import build_graph
 from vibeguard.discovery.scale import detect_scale
 from vibeguard.discovery.tech import detect_tech
 from vibeguard.engine.checklist import DetectorInfo, derive_checklist
+from vibeguard.fixers.engine import ConfirmFn, FixerEngine
+from vibeguard.fixers.git_safety import GitSafety
 from vibeguard.reporting.scoring import score_findings
+from vibeguard.validation.engine import ValidationEngine
 
 __all__ = ["Engine", "EXIT_OK", "EXIT_FINDINGS", "EXIT_ERROR", "EXIT_DIRTY_WORKTREE"]
 
@@ -43,6 +48,18 @@ EXIT_ERROR = 2
 EXIT_DIRTY_WORKTREE = 3
 
 FixMode = Literal["safe", "interactive"]
+
+
+@dataclass
+class _Detection:
+    """What one detection pass produced; shared by the audit and fix pipelines."""
+
+    all_rules: list[Rule]
+    rules: list[Rule]
+    findings: list[Finding]
+    adapters_used: list[str] = field(default_factory=list)
+    adapters_ran: list[ToolAdapter] = field(default_factory=list)
+    categories: set[Category] = field(default_factory=set)
 
 
 class Engine:
@@ -60,6 +77,9 @@ class Engine:
         self.events = events or EventBus()
         self._registry = registry
         self._adapters = adapters
+        #: Populated by :meth:`fix`, so the CLI can report branch and validation context.
+        self.last_git_safety: GitSafety | None = None
+        self.last_validation: ValidationEngine | None = None
 
     # ------------------------------------------------------------- registry
     @property
@@ -286,17 +306,13 @@ class Engine:
         detectors = self._detectors(ctx, rules, applicable, adapters_ran)
         return derive_checklist(detectors, findings)
 
-    # ----------------------------------------------------------------- audit
-    def audit(self, path: str | Path, *, mode: str = "audit") -> ScanReport:
-        """Full read-only pipeline; never writes to the target repository."""
-        root = Path(path).resolve()
-        self.events.emit("scan.started", repo=str(root), mode=mode)
-
-        ctx = self.build_context(root)
+    # -------------------------------------------------------------- detection
+    def _detection_pass(self, ctx: ScanContext) -> _Detection:
+        """Rule selection + detection + adapters + dedup, shared by audit and fix."""
         self.events.emit("scan.stage", stage="rule_selection")
         all_rules = self.registry.instantiate()
         rules = self.select_rules(ctx)
-        applicable_categories = {rule.category for rule in rules}
+        categories = {rule.category for rule in rules}
 
         self.events.emit("scan.stage", stage="detection")
         findings = self._dedup(self._detect(ctx, rules))
@@ -304,45 +320,83 @@ class Engine:
         self.events.emit("scan.stage", stage="adapters")
         external, adapters_used, adapters_ran = self._run_adapters(ctx)
         findings = self._dedup(self._merge_adapter_findings(findings, self._dedup(external)))
-        applicable_categories |= {f.category for f in external}
+        categories |= {f.category for f in external}
+        return _Detection(
+            all_rules=all_rules,
+            rules=rules,
+            findings=findings,
+            adapters_used=adapters_used,
+            adapters_ran=adapters_ran,
+            categories=categories,
+        )
 
-        # M3 seam: the repair loop runs here, attaching FixRecords to findings, and the
-        # checklist below then reports FIXED topics with their validation evidence.
-        self.events.emit("scan.stage", stage="checklist")
-        checklist = self.build_checklist(ctx, all_rules, rules, adapters_ran, findings)
-
-        self.events.emit("scan.stage", stage="scoring")
-        scores, overall = score_findings(findings, applicable_categories)
-        counts = self._counts(findings)
-
-        report = ScanReport(
-            repo=str(root),
+    def _build_report(
+        self,
+        ctx: ScanContext,
+        detection: _Detection,
+        *,
+        mode: str,
+        checklist: list[ChecklistItem],
+        scores_before: list,
+        overall_before: int,
+        scores_after: list | None = None,
+        overall_after: int | None = None,
+        validators_used: list[str] | None = None,
+    ) -> ScanReport:
+        return ScanReport(
+            repo=str(ctx.root),
             scan_date=datetime.now(UTC),
             vibeguard_version=__version__,
             mode=mode,
             tech=ctx.tech,
             scale=ctx.scale,
             graph=ctx.graph,
-            findings=findings,
+            findings=detection.findings,
             checklist=checklist,
-            scores_before=scores,
-            scores_after=None,
-            overall_before=overall,
-            overall_after=None,
-            counts=counts,
+            scores_before=scores_before,
+            scores_after=scores_after,
+            overall_before=overall_before,
+            overall_after=overall_after,
+            counts=self._counts(detection.findings),
             regression=None,
-            adapters_used=adapters_used,
-            validators_used=[],
+            adapters_used=detection.adapters_used,
+            validators_used=validators_used or [],
             ai_used=False,
             local_only=self.config.local_only or self.config.ai.provider == "null",
             suppressions=[],
+        )
+
+    # ----------------------------------------------------------------- audit
+    def audit(self, path: str | Path, *, mode: str = "audit") -> ScanReport:
+        """Full read-only pipeline; never writes to the target repository."""
+        root = Path(path).resolve()
+        self.events.emit("scan.started", repo=str(root), mode=mode)
+
+        ctx = self.build_context(root)
+        detection = self._detection_pass(ctx)
+
+        self.events.emit("scan.stage", stage="checklist")
+        checklist = self.build_checklist(
+            ctx, detection.all_rules, detection.rules, detection.adapters_ran, detection.findings
+        )
+
+        self.events.emit("scan.stage", stage="scoring")
+        scores, overall = score_findings(detection.findings, detection.categories)
+
+        report = self._build_report(
+            ctx,
+            detection,
+            mode=mode,
+            checklist=checklist,
+            scores_before=scores,
+            overall_before=overall,
         )
         self.events.emit(
             "scan.completed",
             repo=str(root),
             mode=mode,
-            findings=len(findings),
-            counts=counts,
+            findings=len(detection.findings),
+            counts=report.counts,
             overall=overall,
         )
         return report
@@ -366,9 +420,82 @@ class Engine:
         return counts
 
     # ------------------------------------------------------------------- fix
-    def fix(self, path: str | Path, mode: FixMode = "safe") -> ScanReport:
-        """Repair pipeline — implemented in M3 (fixers + validation ladder)."""
-        raise NotImplementedError("M3")
+    def fix(
+        self,
+        path: str | Path,
+        mode: FixMode = "safe",
+        *,
+        confirm: ConfirmFn | None = None,
+    ) -> ScanReport:
+        """Detect, repair what is provably safe, validate it, and report honestly.
+
+        The order is deliberate: git preflight happens *before* anything is written, the
+        validation baseline is captured before the first patch (so a pre-broken test
+        suite cannot be blamed on our edit), and scoring is computed twice — once over
+        the findings as detected, once treating validated fixes as closed.
+        """
+        root = Path(path).resolve()
+        scan_mode = f"fix-{mode}"
+        self.events.emit("scan.started", repo=str(root), mode=scan_mode)
+
+        ctx = self.build_context(root)
+        detection = self._detection_pass(ctx)
+
+        self.events.emit("scan.stage", stage="git.preflight")
+        git = GitSafety(root, allow_no_git=self.config.fix.allow_no_git)
+        state = git.preflight()
+        if state.is_repo:
+            self.events.emit("scan.stage", stage="git.branch")
+            git.create_fix_branch()
+
+        self.events.emit("scan.stage", stage="validation.baseline")
+        validation = ValidationEngine(events=self.events)
+        validation.baseline(ctx)
+
+        self.events.emit("scan.stage", stage="repair")
+        fixer = FixerEngine(
+            git=git,
+            validation=validation,
+            rules={rule.id: rule for rule in detection.rules},
+            events=self.events,
+            config=self.config,
+            confirm=confirm,
+        )
+        findings = fixer.repair(ctx, detection.findings, mode)
+        detection.findings = findings
+        self.last_git_safety = git
+        self.last_validation = validation
+
+        self.events.emit("scan.stage", stage="checklist")
+        checklist = self.build_checklist(
+            ctx, detection.all_rules, detection.rules, detection.adapters_ran, findings
+        )
+
+        self.events.emit("scan.stage", stage="scoring")
+        scores_before, overall_before = score_findings(findings, detection.categories)
+        remaining = [f for f in findings if f.fix is None or f.fix.status is not FixStatus.FIXED]
+        scores_after, overall_after = score_findings(remaining, detection.categories)
+
+        report = self._build_report(
+            ctx,
+            detection,
+            mode=scan_mode,
+            checklist=checklist,
+            scores_before=scores_before,
+            overall_before=overall_before,
+            scores_after=scores_after,
+            overall_after=overall_after,
+            validators_used=validation.validators_used(),
+        )
+        self.events.emit(
+            "scan.completed",
+            repo=str(root),
+            mode=scan_mode,
+            findings=len(findings),
+            counts=report.counts,
+            overall=overall_after,
+        )
+        return report
 
     # -------------------------------------------------------------------- ci
     def ci(self, path: str | Path) -> tuple[ScanReport, int]:

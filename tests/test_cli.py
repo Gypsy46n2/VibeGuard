@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -120,16 +121,78 @@ def test_doctor_reports_environment():
     assert "bandit" in result.stdout
 
 
-def test_fix_reports_milestone(repo: Path):
-    result = runner.invoke(app, ["fix", str(repo)])
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(root), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+@pytest.fixture
+def fixable_repo(tmp_path: Path) -> Path:
+    target = tmp_path / "fixable"
+    shutil.copytree(Path(__file__).parent / "fixtures" / "fixable_app", target)
+    _git(target, "init", "-q")
+    _git(target, "config", "user.email", "test@example.invalid")
+    _git(target, "config", "user.name", "Test")
+    _git(target, "add", "-A")
+    _git(target, "commit", "-qm", "initial")
+    return target
+
+
+def test_fix_safe_repairs_and_reports(fixable_repo: Path):
+    result = runner.invoke(app, ["fix", str(fixable_repo), "--safe"])
+    assert result.exit_code == 0, result.output
+    assert "Repairs" in result.stdout
+    assert "fixed" in result.stdout
+    assert "vibeguard/fix-" in result.stdout
+    assert "timeout=30" in (fixable_repo / "app.py").read_text(encoding="utf-8")
+
+    data = json.loads((fixable_repo / REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert data["mode"] == "fix-safe"
+    assert data["overall_after"] is not None
+    assert any(f.get("fix", {}) and f["fix"]["status"] == "fixed" for f in data["findings"])
+
+
+def test_fix_without_a_mode_defaults_to_safe_with_a_notice(fixable_repo: Path):
+    result = runner.invoke(app, ["fix", str(fixable_repo)])
+    assert result.exit_code == 0, result.output
+    assert "--safe" in result.stdout
+    assert json.loads(
+        (fixable_repo / REPORT_FILENAME).read_text(encoding="utf-8")
+    )["mode"] == "fix-safe"
+
+
+def test_fix_rejects_both_modes_at_once(fixable_repo: Path):
+    result = runner.invoke(app, ["fix", str(fixable_repo), "--safe", "--interactive"])
+    assert result.exit_code == 2
+
+
+def test_fix_refuses_a_dirty_worktree_with_exit_code_three(fixable_repo: Path):
+    (fixable_repo / "app.py").write_text("# scribbled\n", encoding="utf-8")
+    result = runner.invoke(app, ["fix", str(fixable_repo), "--safe"])
+    assert result.exit_code == 3
+    assert "git stash" in result.output
+
+
+def test_fix_outside_a_repository_is_an_execution_error(tmp_path: Path):
+    plain = tmp_path / "plain"
+    shutil.copytree(Path(__file__).parent / "fixtures" / "fixable_app", plain)
+    result = runner.invoke(app, ["fix", str(plain), "--safe"])
+    assert result.exit_code == 2
+    assert "--allow-no-git" in result.output
+
+
+def test_report_renders_the_stored_scan(repo: Path):
+    runner.invoke(app, ["audit", str(repo)])
+    result = runner.invoke(app, ["report", str(repo)])
     assert result.exit_code == 0
-    assert "not yet implemented" in result.stdout
+    assert "Findings by severity" in result.stdout
 
 
-def test_report_without_prior_scan(tmp_path: Path):
+def test_report_without_prior_scan_is_an_execution_error(tmp_path: Path):
     result = runner.invoke(app, ["report", str(tmp_path)])
-    assert result.exit_code == 0
-    assert REPORT_FILENAME in result.stdout
+    assert result.exit_code == 2
+    assert REPORT_FILENAME in result.output
 
 
 def test_baseline_subcommands(repo: Path):

@@ -14,21 +14,33 @@ from typing import Annotated, Any
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.syntax import Syntax
 from rich.table import Table
 
 from vibeguard import __version__
 from vibeguard.adapters import build_adapters
 from vibeguard.core.config import VibeguardConfig
 from vibeguard.core.events import EventBus
-from vibeguard.core.models import Category, ChecklistStatus, ScanReport, Severity
+from vibeguard.core.models import (
+    Category,
+    ChecklistStatus,
+    FixStatus,
+    ScanReport,
+    Severity,
+)
 from vibeguard.core.registry import build_registry
 from vibeguard.engine.checklist import section_rollup
 from vibeguard.engine.orchestrator import (
+    EXIT_DIRTY_WORKTREE,
     EXIT_ERROR,
     EXIT_FINDINGS,
     EXIT_OK,
     Engine,
 )
+from vibeguard.fixers.git_safety import DirtyWorktreeError, GitSafetyError, NoGitRepoError
+from vibeguard.validation.engine import ValidationEngine
 
 __all__ = ["app", "main"]
 
@@ -55,11 +67,6 @@ class OutputFormat(str, Enum):
     HTML = "html"
 
 
-class FixMode(str, Enum):
-    SAFE = "safe"
-    INTERACTIVE = "interactive"
-
-
 # --------------------------------------------------------------------- helpers
 
 
@@ -71,6 +78,7 @@ def _load_config(
     fail_on: Severity | None = None,
     use_baseline: bool | None = None,
     allow_no_git: bool | None = None,
+    deep_validate: bool | None = None,
 ) -> VibeguardConfig:
     config = VibeguardConfig.load(path)
     return config.merge_cli(
@@ -79,6 +87,7 @@ def _load_config(
         fail_on=fail_on,
         use_baseline=use_baseline,
         allow_no_git=allow_no_git,
+        deep_validate=deep_validate,
     )
 
 
@@ -324,43 +333,173 @@ def audit(
 @app.command()
 def fix(
     path: Annotated[Path, typer.Argument(help="Repository to repair.")] = Path("."),
-    mode: Annotated[
-        FixMode, typer.Option("--mode", help="safe = SAFE_AUTOFIX only.")
-    ] = FixMode.SAFE,
+    safe: Annotated[
+        bool, typer.Option("--safe", help="Apply only SAFE_AUTOFIX repairs (default).")
+    ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive",
+            help="Also offer review-recommended repairs, one diff at a time.",
+        ),
+    ] = False,
+    deep_validate: Annotated[
+        bool,
+        typer.Option("--deep-validate", help="Add the container-build validation rung."),
+    ] = False,
     local_only: Annotated[bool, typer.Option("--local-only")] = False,
     allow_no_git: Annotated[bool, typer.Option("--allow-no-git")] = False,
 ) -> None:
-    """Repair findings (implemented in M3)."""
-    config = _load_config(
-        path.resolve(), local_only=local_only or None, allow_no_git=allow_no_git or None
-    )
-    engine = Engine(config)
-    try:
-        engine.fix(path, mode.value)  # type: ignore[arg-type]
-    except NotImplementedError:
+    """Repair findings on a dedicated branch, validating every change."""
+    if safe and interactive:
+        err_console.print("[red]error:[/] choose either --safe or --interactive, not both.")
+        raise typer.Exit(EXIT_ERROR)
+    mode: str = "interactive" if interactive else "safe"
+    if not safe and not interactive:
         console.print(
-            "[yellow]vibeguard fix is not yet implemented[/] — the repair engine, git "
-            "safety, and validation ladder land in milestone M3. Run "
-            "[bold]vibeguard audit[/] for the read-only report."
+            "[dim]no mode given — running [bold]--safe[/bold] (SAFE_AUTOFIX repairs only). "
+            "Use --interactive to review the rest.[/]"
         )
+
+    root = path.resolve()
+    config = _load_config(
+        root,
+        local_only=local_only or None,
+        allow_no_git=allow_no_git or None,
+        deep_validate=deep_validate or None,
+    )
+    events = EventBus()
+    engine = Engine(config, events=events)
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("starting", total=None)
+            events.subscribe(
+                "scan.stage",
+                lambda _n, payload: progress.update(
+                    task, description=str(payload.get("stage", ""))
+                ),
+            )
+            events.subscribe(
+                "repair.started",
+                lambda _n, payload: progress.update(
+                    task, description=f"repairing {payload.get('rule_id', '')}"
+                ),
+            )
+            scan_report = engine.fix(root, mode, confirm=_confirm_fix)  # type: ignore[arg-type]
+        destination = _write_report(scan_report, root)
+    except DirtyWorktreeError as exc:
+        err_console.print(f"[red]refusing to run:[/] {exc}")
+        raise typer.Exit(EXIT_DIRTY_WORKTREE) from exc
+    except (NoGitRepoError, GitSafetyError) as exc:
+        err_console.print(f"[red]error:[/] {exc}")
+        raise typer.Exit(EXIT_ERROR) from exc
+    except NotADirectoryError as exc:
+        err_console.print(f"[red]error:[/] {exc}")
+        raise typer.Exit(EXIT_ERROR) from exc
+
+    events.emit("report.generated", path=str(destination), format="json")
+    _print_fix_summary(scan_report, engine)
+    console.print(f"\nreport written to [bold]{destination}[/]")
     raise typer.Exit(EXIT_OK)
+
+
+def _confirm_fix(finding: Any, diff: str) -> bool:
+    """Interactive approval: show the unified diff, then ask."""
+    console.print()
+    console.print(
+        Panel(
+            Syntax(diff or "(no diff)", "diff", theme="ansi_dark", word_wrap=True),
+            title=f"{finding.rule_id} · {finding.title}",
+            subtitle=f"{finding.file or '.'}:{finding.line or '-'}",
+        )
+    )
+    return typer.confirm("apply this fix?", default=False)
+
+
+_FIX_STYLE: dict[FixStatus, str] = {
+    FixStatus.FIXED: "bold green",
+    FixStatus.PARTIALLY_FIXED: "yellow",
+    FixStatus.UNVERIFIED: "yellow",
+    FixStatus.ATTEMPTED: "yellow",
+    FixStatus.FAILED: "red",
+    FixStatus.REQUIRES_REVIEW: "cyan",
+    FixStatus.NOT_ATTEMPTED: "dim",
+}
+
+
+def _print_fix_summary(report: ScanReport, engine: Engine) -> None:
+    """Per-fix table: status, commit, and the validation evidence behind it."""
+    git = engine.last_git_safety
+    if git is not None:
+        console.print(f"[bold]safety:[/] {git.describe()}")
+    validation = engine.last_validation
+    if validation is not None and validation.baseline_note():
+        console.print(f"[yellow]baseline:[/] {validation.baseline_note()}")
+
+    attempted = [f for f in report.findings if f.fix is not None]
+    table = Table(title="Repairs")
+    table.add_column("rule")
+    table.add_column("location")
+    table.add_column("status")
+    table.add_column("commit")
+    table.add_column("validation")
+    for finding in attempted:
+        record = finding.fix
+        assert record is not None
+        location = finding.file or "."
+        if finding.line:
+            location = f"{location}:{finding.line}"
+        evidence = ValidationEngine.summarise(record.validation) if record.validation else (
+            record.patch_summary[:60] or "—"
+        )
+        table.add_row(
+            finding.rule_id,
+            location,
+            f"[{_FIX_STYLE[record.status]}]{record.status.value}[/]",
+            (record.commit_sha or "—")[:12],
+            evidence,
+        )
+    if attempted:
+        console.print(table)
+    else:
+        console.print("[dim]no finding was eligible for an automated repair.[/]")
+
+    fixed = sum(
+        1 for f in report.findings if f.fix is not None and f.fix.status is FixStatus.FIXED
+    )
+    console.print(
+        f"\n[bold]{fixed}[/] finding(s) fixed and validated · overall score "
+        f"{report.overall_before} → {report.overall_after}"
+    )
+    _print_checklist(report)
 
 
 @app.command()
 def report(
     path: Annotated[Path, typer.Argument(help="Repository whose last scan to render.")] = Path("."),
 ) -> None:
-    """Re-render the last scan (renderers land in M4)."""
+    """Re-render the last scan from ``vibeguard-report.json``."""
     destination = path.resolve() / REPORT_FILENAME
-    if destination.is_file():
-        console.print(
-            f"[yellow]report rendering is not yet implemented[/] (M4). "
-            f"The canonical JSON report is at [bold]{destination}[/]."
+    if not destination.is_file():
+        err_console.print(
+            f"[red]no {REPORT_FILENAME} found[/] at {destination} — run "
+            "[bold]vibeguard audit[/] first."
         )
-    else:
-        console.print(
-            f"[yellow]no {REPORT_FILENAME} found[/] — run [bold]vibeguard audit[/] first."
-        )
+        raise typer.Exit(EXIT_ERROR)
+    try:
+        stored = ScanReport.model_validate_json(destination.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        err_console.print(f"[red]error:[/] {destination} is not a readable VibeGuard report")
+        raise typer.Exit(EXIT_ERROR) from exc
+    console.print(f"[dim]{stored.mode} scan of {stored.repo} at {stored.scan_date}[/]")
+    _print_summary(stored)
+    console.print("[dim]markdown and HTML rendering land in M4.[/]")
     raise typer.Exit(EXIT_OK)
 
 

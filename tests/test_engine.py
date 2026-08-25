@@ -220,9 +220,16 @@ def test_ci_exit_codes(sample_app: Path):
     assert code_none == (EXIT_FINDINGS if expected else EXIT_OK)
 
 
-def test_fix_raises_not_implemented(sample_app: Path):
-    with pytest.raises(NotImplementedError, match="M3"):
-        Engine(VibeguardConfig()).fix(sample_app, "safe")
+def test_fix_refuses_to_touch_a_non_repository(sample_app: Path, tmp_path: Path):
+    """Outside git there is no rollback, so fix refuses rather than writing."""
+    from vibeguard.fixers.git_safety import NoGitRepoError
+
+    target = tmp_path / "app"
+    shutil.copytree(sample_app, target)
+    before = (target / "app.py").read_text(encoding="utf-8")
+    with pytest.raises(NoGitRepoError):
+        Engine(VibeguardConfig()).fix(target, "safe")
+    assert (target / "app.py").read_text(encoding="utf-8") == before
 
 
 def test_audit_rejects_non_directory(tmp_path: Path):
