@@ -127,11 +127,16 @@ def test_interactive_mode_applies_approved_review_fixes(app_repo: Path):
         confirm=lambda finding, diff: finding.rule_id == "VG-CTR-001",
     )
     ctr = next(f for f in report.findings if f.rule_id == "VG-CTR-001")
-    # Applied and committed, but honestly downgraded: no rung of the ladder can
-    # confirm a Dockerfile edit unless --deep-validate builds the image.
-    assert ctr.fix.status is FixStatus.UNVERIFIED
+    # No rung of the ladder can confirm a Dockerfile edit unless --deep-validate builds
+    # the image — but the generated repro test can, and does: it failed on the root
+    # image and passes on the repaired one, which is real evidence for FIXED.
+    assert ctr.fix.status is FixStatus.FIXED
     assert ctr.fix.commit_sha
-    assert "applied but unverified" in ctr.fix.residual_risk
+    assert ctr.fix.repro_test == (
+        f".vibeguard/repro/test_vg_ctr_001_{ctr.fingerprint[:12]}.py"
+    )
+    repro = next(step for step in ctr.fix.validation if step.name == "tests:repro")
+    assert repro.passed and not repro.skipped
     assert "USER appuser" in (app_repo / "Dockerfile").read_text(encoding="utf-8")
     # A finding the caller declined is recorded as needing review, not as fixed.
     declined = [

@@ -89,6 +89,10 @@ class FixConfig(BaseModel):
     validation_timeout_full: int = 600
     #: Seconds allowed for change-scoped validators (syntax, lint, targeted tests).
     validation_timeout_targeted: int = 120
+    #: Generate a pytest repro test before repairing a finding, confirm it fails, and
+    #: require it to pass afterwards (``vibeguard.testing``). Only rules with a
+    #: template are affected; everything else is unchanged.
+    repro_tests: bool = True
 
 
 class HistoryConfig(BaseModel):

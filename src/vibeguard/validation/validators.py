@@ -121,6 +121,13 @@ def _npm_script(root: Path, name: str) -> bool:
     return isinstance(scripts, dict) and bool(scripts.get(name))
 
 
+#: VibeGuard's generated repro tests live under ``.vibeguard/repro/`` and are run
+#: individually by the repair loop. They must never be collected as part of the
+#: *project's* suite: a repro test is failing by design until its fix lands, and one
+#: pending repair would otherwise mark every later fix as breaking the test suite.
+_IGNORE_VIBEGUARD = "--ignore=.vibeguard"
+
+
 def _pytest_project(ctx: ScanContext) -> bool:
     if "pytest" in {t.lower() for t in ctx.tech.test_frameworks}:
         return True
@@ -311,7 +318,7 @@ class TargetedTestValidator(Validator):
         if py and _pytest_project(ctx):
             expression = " or ".join(sorted({PurePosixPath(f).stem for f in py}))
             result = run_command(
-                [sys.executable, "-m", "pytest", "-q", "-k", expression],
+                [sys.executable, "-m", "pytest", "-q", _IGNORE_VIBEGUARD, "-k", expression],
                 cwd=root,
                 timeout=self._timeout(ctx, full=False),
             )
@@ -346,7 +353,7 @@ class FullTestValidator(Validator):
         root = str(ctx.root)
         if _pytest_project(ctx):
             result = run_command(
-                [sys.executable, "-m", "pytest", "-q"],
+                [sys.executable, "-m", "pytest", "-q", _IGNORE_VIBEGUARD],
                 cwd=root,
                 timeout=self._timeout(ctx),
             )

@@ -32,11 +32,13 @@ from vibeguard.core.models import (
     FixRecord,
     FixStatus,
     Patch,
+    ValidationStep,
 )
 from vibeguard.core.redact import redact
 from vibeguard.core.rule import Rule
 from vibeguard.fixers.git_safety import GitSafety, GitSafetyError
 from vibeguard.rules._fixes import sha256_text
+from vibeguard.testing import ReproRunner, ReproTest
 from vibeguard.validation.engine import ValidationEngine
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -85,6 +87,7 @@ class FixerEngine:
         events: EventBus | None = None,
         config: VibeguardConfig | None = None,
         confirm: ConfirmFn | None = None,
+        repro: ReproRunner | None = None,
     ) -> None:
         self.git = git
         self.validation = validation
@@ -92,6 +95,11 @@ class FixerEngine:
         self.events = events or EventBus()
         self.config = config or VibeguardConfig()
         self.confirm = confirm
+        self.repro = repro if repro is not None else ReproRunner(
+            events=self.events,
+            timeout=self.config.fix.validation_timeout_targeted,
+            enabled=self.config.fix.repro_tests,
+        )
         #: Commit shas produced during this run, oldest first.
         self.commits: list[str] = []
 
@@ -175,6 +183,11 @@ class FixerEngine:
             summary=patch.description,
         )
 
+        # Generate the repro test *before* anything is written and insist it fails:
+        # a test that already passes on the unrepaired code proves nothing, and is
+        # discarded rather than used as evidence (vibeguard.testing).
+        repro = self.repro.prepare(ctx, finding)
+
         originals: dict[str, str] = {}
         for edit in patch.file_edits:
             target = ctx.root / edit.path
@@ -220,8 +233,16 @@ class FixerEngine:
 
         self.events.emit("validation.started", finding=finding.id, rule_id=finding.rule_id,
                          files=paths)
-        steps = self.validation.validate(ctx, paths)
-        status = self.validation.verdict(steps)
+        repro_passed, repro_step = self._confirm_repro(ctx, repro)
+        if repro_passed is False:
+            # The defect is demonstrably still there. Running the rest of the ladder
+            # would spend minutes to reach the verdict we already have.
+            steps = [repro_step] if repro_step else []
+        else:
+            steps = self.validation.validate(ctx, paths)
+            if repro_step is not None:
+                steps = [*steps, repro_step]
+        status = self.validation.verdict(steps, repro_passed)
         self.events.emit(
             "validation.completed",
             finding=finding.id,
@@ -249,6 +270,7 @@ class FixerEngine:
                 original_snippet=snippets[0],
                 repaired_snippet=snippets[1],
                 validation=steps,
+                repro_test=repro.path if repro else None,
                 residual_risk=(
                     "the patch was rolled back after validation failed; the original "
                     "finding is unchanged. " + residual
@@ -280,7 +302,39 @@ class FixerEngine:
             repaired_snippet=snippets[1],
             commit_sha=commit_sha,
             validation=steps,
+            repro_test=repro.path if repro else None,
             residual_risk=residual,
+        )
+
+    # -------------------------------------------------------------------- repro
+    def _confirm_repro(
+        self, ctx: ScanContext, repro: ReproTest | None
+    ) -> tuple[bool | None, ValidationStep | None]:
+        """Re-run the repro test after the patch and turn the result into evidence.
+
+        Returns ``(passed, step)``. ``passed is None`` — no repro test, or the run told
+        us nothing — leaves the verdict entirely to the validation ladder, exactly as
+        before repro tests existed.
+        """
+        if repro is None:
+            return None, None
+        passed = self.repro.confirm(ctx, repro)
+        if passed is None:
+            return None, ValidationStep(
+                name="tests:repro",
+                passed=False,
+                skipped=True,
+                detail=f"{repro.path} could not be run; the repair is not repro-verified",
+            )
+        return passed, ValidationStep(
+            name="tests:repro",
+            passed=passed,
+            detail=(
+                f"{repro.path} failed before the patch and now passes — {repro.describes} "
+                "is no longer true"
+                if passed
+                else f"{repro.path} still fails after the patch — {repro.describes}"
+            ),
         )
 
     # ------------------------------------------------------------------ helpers
