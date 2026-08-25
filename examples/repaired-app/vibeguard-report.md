@@ -1,6 +1,40 @@
 # VibeGuard report
 
-_fix-safe scan of `examples/repaired-app` on 2026-08-25T16:28:20+00:00 by vibeguard 0.1.0._
+_fix-safe scan of `examples/repaired-app` on 2026-08-25T17:04:28+00:00 by vibeguard 0.2.0._
+
+## Architecture
+
+6 node(s) and 5 edge(s) were inferred from the manifests, configuration and code. Node colour is the category score that governs that node — green ≥85, amber 60–84, red <60, grey unscored.
+
+```mermaid
+flowchart LR
+  subgraph g1["app / services"]
+    direction TB
+    n0["repaired-app"]
+  end
+  subgraph g2["data #38; infrastructure"]
+    direction TB
+    n1[("postgres")]
+    n2[("sqlite")]
+  end
+  subgraph g3["external"]
+    direction TB
+    n3(["billing.example.com"])
+    n4(["search.example.com"])
+    n5(["avatars.example.com"])
+  end
+  n0 -->|reads_writes| n1
+  n0 -->|reads_writes| n2
+  n0 -->|calls| n3
+  n0 -->|calls| n4
+  n0 -->|calls| n5
+  classDef ok fill:#e4f4ea,stroke:#1a7f4b,color:#12281c;
+  classDef warn fill:#fbf1d8,stroke:#b8860b,color:#3a2e08;
+  classDef bad fill:#fae3e3,stroke:#b21b1b,color:#3a1010;
+  classDef unknown fill:#f1f4f7,stroke:#8a939c,color:#22262a;
+  class n3,n4,n5 warn;
+  class n0,n1,n2 bad;
+```
 
 ## Executive summary
 
@@ -9,9 +43,9 @@ _fix-safe scan of `examples/repaired-app` on 2026-08-25T16:28:20+00:00 by vibegu
 | Repository | examples/repaired-app |
 | Stack | python (3 files) · frameworks: flask · databases: postgres, sqlite · containers: docker, compose · CI/CD: github-actions |
 | Scale | small — 146 LOC, 1 service(s), sensitive data: yes |
-| Scan date | 2026-08-25T16:28:20+00:00 |
+| Scan date | 2026-08-25T17:04:28+00:00 |
 | Mode | fix-safe |
-| VibeGuard version | 0.1.0 |
+| VibeGuard version | 0.2.0 |
 | Production readiness | 55/100 → 57/100 |
 | Issues by severity | critical 7, high 27, medium 22, low 18, info 3 — 77 open in total |
 | Repair outcomes | fixed 5 · requires review 28 · not attempted 38 · no automated repair attempted 6 |
@@ -1499,7 +1533,7 @@ requests.post(
         verify=False, timeout=30
 ```
 
-- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.post(...)` at app.py:85 so the call cannot block forever. · commit: eaefdab51370
+- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.post(...)` at app.py:85 so the call cannot block forever. · commit: 71d696817cc6
 - **Tests Performed:** repro test: .vibeguard/repro/test_vg_api_001_06206740c4ea.py · validators run: syntax, tests:repro · skipped: typecheck (the project configures no mypy settings); lint (the project configures no ruff settings); tests:targeted (no test framework detected for the changed files); tests:full (the project has no test suite to run); build (no build step detected); container_build (container builds run only with --deep-validate); startup (start-up smoke tests are not implemented in the MVP: booting an unknown app needs its runtime configuration (ports, env, databases). Tracked as a known gap rather than faked.)
 - **Validation Result:** syntax=pass, typecheck=skipped, lint=skipped, tests:targeted=skipped, tests:full=skipped, build=skipped, container_build=skipped, startup=skipped, tests:repro=pass
 - **Residual Risk:** not exercised by: typecheck, lint, tests:targeted, tests:full, build, container_build, startup
@@ -1543,7 +1577,7 @@ requests.get(target)
     mirrored = requests.get(target, timeout=30)
 ```
 
-- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.get(...)` at app.py:91 so the call cannot block forever. · commit: 8fdfdb32a7e2
+- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.get(...)` at app.py:91 so the call cannot block forever. · commit: 83282a73fb33
 - **Tests Performed:** repro test: .vibeguard/repro/test_vg_api_001_22cd33b45c95.py · validators run: syntax, tests:repro · skipped: typecheck (the project configures no mypy settings); lint (the project configures no ruff settings); tests:targeted (no test framework detected for the changed files); tests:full (the project has no test suite to run); build (no build step detected); container_build (container builds run only with --deep-validate); startup (start-up smoke tests are not implemented in the MVP: booting an unknown app needs its runtime configuration (ports, env, databases). Tracked as a known gap rather than faked.)
 - **Validation Result:** syntax=pass, typecheck=skipped, lint=skipped, tests:targeted=skipped, tests:full=skipped, build=skipped, container_build=skipped, startup=skipped, tests:repro=pass
 - **Residual Risk:** not exercised by: typecheck, lint, tests:targeted, tests:full, build, container_build, startup
@@ -1590,7 +1624,7 @@ requests.post(
         json={"id": note_id, "body": body}, timeout=30
 ```
 
-- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.post(...)` at integrations.py:11 so the call cannot block forever. · commit: be475e64b67e
+- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.post(...)` at integrations.py:11 so the call cannot block forever. · commit: ddf806f56504
 - **Tests Performed:** repro test: .vibeguard/repro/test_vg_api_001_763a20518104.py · validators run: syntax, tests:repro · skipped: typecheck (the project configures no mypy settings); lint (the project configures no ruff settings); tests:targeted (no test framework detected for the changed files); tests:full (the project has no test suite to run); build (no build step detected); container_build (container builds run only with --deep-validate); startup (start-up smoke tests are not implemented in the MVP: booting an unknown app needs its runtime configuration (ports, env, databases). Tracked as a known gap rather than faked.)
 - **Validation Result:** syntax=pass, typecheck=skipped, lint=skipped, tests:targeted=skipped, tests:full=skipped, build=skipped, container_build=skipped, startup=skipped, tests:repro=pass
 - **Residual Risk:** not exercised by: typecheck, lint, tests:targeted, tests:full, build, container_build, startup
@@ -1634,7 +1668,7 @@ requests.get(f"{AVATAR_API}/{email}.png")
     response = requests.get(f"{AVATAR_API}/{email}.png", timeout=30)
 ```
 
-- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.get(...)` at integrations.py:19 so the call cannot block forever. · commit: e29e53b6da1d
+- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.get(...)` at integrations.py:19 so the call cannot block forever. · commit: 1a84095c6229
 - **Tests Performed:** repro test: .vibeguard/repro/test_vg_api_001_79a9fc8fbfd0.py · validators run: syntax, tests:repro · skipped: typecheck (the project configures no mypy settings); lint (the project configures no ruff settings); tests:targeted (no test framework detected for the changed files); tests:full (the project has no test suite to run); build (no build step detected); container_build (container builds run only with --deep-validate); startup (start-up smoke tests are not implemented in the MVP: booting an unknown app needs its runtime configuration (ports, env, databases). Tracked as a known gap rather than faked.)
 - **Validation Result:** syntax=pass, typecheck=skipped, lint=skipped, tests:targeted=skipped, tests:full=skipped, build=skipped, container_build=skipped, startup=skipped, tests:repro=pass
 - **Residual Risk:** not exercised by: typecheck, lint, tests:targeted, tests:full, build, container_build, startup
@@ -1678,7 +1712,7 @@ requests.post(subscriber["webhook"], json={"note": note_id})
             requests.post(subscriber["webhook"], json={"note": note_id}, timeout=30)
 ```
 
-- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.post(...)` at integrations.py:27 so the call cannot block forever. · commit: 482d2f478796
+- **Repair Performed:** status: fixed · Add `timeout=30` to `requests.post(...)` at integrations.py:27 so the call cannot block forever. · commit: 8e9898ee0b9b
 - **Tests Performed:** repro test: .vibeguard/repro/test_vg_api_001_e1da65a72dc8.py · validators run: syntax, tests:repro · skipped: typecheck (the project configures no mypy settings); lint (the project configures no ruff settings); tests:targeted (no test framework detected for the changed files); tests:full (the project has no test suite to run); build (no build step detected); container_build (container builds run only with --deep-validate); startup (start-up smoke tests are not implemented in the MVP: booting an unknown app needs its runtime configuration (ports, env, databases). Tracked as a known gap rather than faked.)
 - **Validation Result:** syntax=pass, typecheck=skipped, lint=skipped, tests:targeted=skipped, tests:full=skipped, build=skipped, container_build=skipped, startup=skipped, tests:repro=pass
 - **Residual Risk:** not exercised by: typecheck, lint, tests:targeted, tests:full, build, container_build, startup

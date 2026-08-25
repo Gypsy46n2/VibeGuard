@@ -481,3 +481,54 @@ readable without gating the build, and gates instead on
 `vibeguard ci examples/vulnerable-app` — where a *failure* is the expected result, and
 a following step asserts the gate really did fail. Gating on a scan we know to be
 noisy would train everyone to ignore it.
+
+### D54. The report shows the architecture before it shows the numbers
+
+Both rendered reports open with a picture: markdown with an `## Architecture` section
+carrying a mermaid `flowchart LR`, HTML with an "Architecture & health at a glance"
+section of three inline SVGs. A reader who has never seen the codebase needs to know
+*what it is* before a score means anything, and the graph is the one part of the report
+that answers that. Mermaid was chosen for markdown because GitHub and GitLab render it
+natively with no toolchain; SVG for HTML because a mermaid block in an HTML file would
+need a script and a CDN, which D40's self-containment forbids.
+
+### D55. Node colour maps to one category score, and an unmeasured node is grey
+
+Each architecture node takes the colour of the single category score that governs it —
+database nodes from `database`, caches from `performance`, brokers and workers from
+`reliability`, external services and entrypoints from `api`, and the application itself
+from the overall readiness score. It is coarse on purpose: a diagram is a glance, and a
+node coloured by an average of everything would say nothing. Bands are 85+/60-84/<60.
+
+A node whose category has no applicable rules — or a report with no scores at all, as a
+discovery-only `vibeguard graph` produces — is drawn grey, never green. Green is a
+claim that we measured something and it was fine; we did not, so we do not make it.
+Scores come from `scores_after` when the run repaired anything, so a fix report's
+diagram shows the repaired state rather than the state it started in.
+
+### D56. Hostile node labels are escaped into mermaid entities, not stripped
+
+Node labels come from the scanned repository — a hostname, a directory name, whatever
+a `docker-compose.yml` happened to contain. A label like `evil "label" [x]-->` would
+otherwise close its own node and inject syntax into the diagram. Every character
+mermaid reads as structure is replaced with its `#NN;` entity form rather than deleted,
+so the label still renders as written and the flowchart cannot be rewritten by the code
+under audit. The escape table applies `#` first, since every other replacement
+introduces one.
+
+### D57. The SVG layout is four hand-laid columns, capped at thirty nodes
+
+No graphviz, no layout library, no new runtime dependency: nodes are bucketed into
+entrypoints / app+services / data+infrastructure / external, stacked in each column,
+and joined by elbow paths. It is not a good general graph layout and does not try to
+be — the graphs discovery infers are shallow and almost always a hub with spokes. Past
+thirty nodes the diagram stops being readable, so the remainder collapses into a single
+"and N more…" node and the edges to dropped nodes are omitted rather than dangling.
+
+### D58. `vibeguard graph` runs discovery and nothing else
+
+The command exists to be fast enough to run on a whim, so it builds the `ScanContext`
+and stops — no rule selection, no detection, no adapters. Colouring therefore comes
+from `.vibeguard/history/` if a scan is recorded there, and is neutral if not. A
+`graph` invocation never writes a report, never records history, and never fails a
+build; it prints a diagram to stdout or the file named by `--out`.

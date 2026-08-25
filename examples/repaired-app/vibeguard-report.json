@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "repo": "examples/repaired-app",
-  "scan_date": "2026-08-25T16:28:20.848921Z",
-  "vibeguard_version": "0.1.0",
+  "scan_date": "2026-08-25T17:04:28.560694Z",
+  "vibeguard_version": "0.2.0",
   "mode": "fix-safe",
   "tech": {
     "languages": {
@@ -65,7 +65,7 @@
       {
         "id": "app",
         "kind": "service",
-        "label": "repaired",
+        "label": "repaired-app",
         "meta": {
           "languages": [
             "python"
@@ -171,7 +171,7 @@
         "patch_summary": "Add `timeout=30` to `requests.post(...)` at app.py:85 so the call cannot block forever.",
         "original_snippet": "        verify=False,",
         "repaired_snippet": "        verify=False, timeout=30",
-        "commit_sha": "eaefdab51370d56f9e6dcbb090a79d37548b0b38",
+        "commit_sha": "71d696817cc6984a7bc0208db8212a0217811c00",
         "validation": [
           {
             "name": "syntax",
@@ -268,7 +268,7 @@
         "patch_summary": "Add `timeout=30` to `requests.get(...)` at app.py:91 so the call cannot block forever.",
         "original_snippet": "    mirrored = requests.get(target)",
         "repaired_snippet": "    mirrored = requests.get(target, timeout=30)",
-        "commit_sha": "8fdfdb32a7e282b4fba907f27d775e8053d175d7",
+        "commit_sha": "83282a73fb3371934c8b24eb12324285dc4a7805",
         "validation": [
           {
             "name": "syntax",
@@ -365,7 +365,7 @@
         "patch_summary": "Add `timeout=30` to `requests.post(...)` at integrations.py:11 so the call cannot block forever.",
         "original_snippet": "        json={\"id\": note_id, \"body\": body},",
         "repaired_snippet": "        json={\"id\": note_id, \"body\": body}, timeout=30",
-        "commit_sha": "be475e64b67eff14f4c46fa368a91fb96b4cb037",
+        "commit_sha": "ddf806f565046c127cae66645fe98022d52bc68f",
         "validation": [
           {
             "name": "syntax",
@@ -462,7 +462,7 @@
         "patch_summary": "Add `timeout=30` to `requests.get(...)` at integrations.py:19 so the call cannot block forever.",
         "original_snippet": "    response = requests.get(f\"{AVATAR_API}/{email}.png\")",
         "repaired_snippet": "    response = requests.get(f\"{AVATAR_API}/{email}.png\", timeout=30)",
-        "commit_sha": "e29e53b6da1d71dc54b3ed0c32d60010531ebd87",
+        "commit_sha": "1a84095c6229af07d419d015ac859b41d05aeed1",
         "validation": [
           {
             "name": "syntax",
@@ -559,7 +559,7 @@
         "patch_summary": "Add `timeout=30` to `requests.post(...)` at integrations.py:27 so the call cannot block forever.",
         "original_snippet": "            requests.post(subscriber[\"webhook\"], json={\"note\": note_id})",
         "repaired_snippet": "            requests.post(subscriber[\"webhook\"], json={\"note\": note_id}, timeout=30)",
-        "commit_sha": "482d2f4787962021e62aea3e994e0d5d6d8aba9a",
+        "commit_sha": "8e9898ee0b9bc18093693d46c9674e98f32fc1c2",
         "validation": [
           {
             "name": "syntax",

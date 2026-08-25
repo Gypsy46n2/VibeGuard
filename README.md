@@ -90,16 +90,63 @@ generated repro test as its evidence. See
 | `vibeguard fix PATH` | Repair on a dedicated branch, one validated commit per fix. |
 | `vibeguard report PATH` | Re-render the last recorded scan — no rescan, no repository access. |
 | `vibeguard ci PATH` | Audit plus a severity gate. Exit 1 when the gate fails. |
+| `vibeguard graph PATH` | Draw the inferred architecture as mermaid or SVG. Discovery only — no rules. |
 | `vibeguard baseline create\|show PATH` | Accept today's findings so CI gates only on new ones. |
 | `vibeguard doctor` | What is available here: python, git, tree-sitter, each adapter. |
 | `vibeguard rules` | Every registered rule with its category, scale, and autofix class. |
 
 Common flags: `--output table,json,jsonl,md,html,all` · `--local-only` · `--packs` ·
 `--deep` (audit: every checklist topic) · `--safe` / `--interactive` /
-`--deep-validate` / `--allow-no-git` (fix) · `--fail-on` / `--baseline` (ci).
+`--deep-validate` / `--allow-no-git` (fix) · `--fail-on` / `--baseline` (ci) ·
+`--format mermaid|svg` / `--out` (graph).
 
 Exit codes: `0` ok · `1` findings at or above the threshold · `2` execution error ·
 `3` refused, dirty git worktree.
+
+### Visualising your architecture
+
+Every markdown report opens with an **Architecture** section: the graph discovery
+inferred — the app, its datastores, its brokers, the third-party hosts it calls — as a
+mermaid `flowchart LR`, which GitHub and GitLab render inline. Nodes are coloured by
+the category score that governs them (database nodes by the `database` score, external
+services by `api`, the app itself by the overall score): green at 85 and above, amber
+from 60, red below, grey when nothing measured it.
+
+```mermaid
+flowchart LR
+  subgraph g1["app / services"]
+    n0["notes-api"]
+  end
+  subgraph g2["data #38; infrastructure"]
+    n1[("postgres")]
+    n2[("redis")]
+  end
+  subgraph g3["external"]
+    n3(["api.stripe.com"])
+  end
+  n0 -->|reads_writes| n1
+  n0 -->|caches| n2
+  n0 -->|calls| n3
+  classDef bad fill:#fae3e3,stroke:#b21b1b,color:#3a1010;
+  class n0,n1 bad;
+```
+
+The HTML report says the same thing without needing a mermaid renderer: an
+**Architecture & health at a glance** section of three inline SVGs — the diagram, the
+category scores as bars, and the checklist as one stacked bar per section. They are
+plain SVG with no script and no external reference, so the report still renders from a
+CI artifact store with JavaScript disabled.
+
+`vibeguard graph PATH` prints just the diagram, running discovery alone:
+
+```bash
+vibeguard graph .                              # mermaid on stdout
+vibeguard graph . --format svg --out arch.svg  # standalone SVG file
+```
+
+It reuses the scores from `.vibeguard/history/` when a scan is recorded there, and
+draws everything neutral when there is none — an unmeasured node must never look like
+a healthy one.
 
 ## Modes
 

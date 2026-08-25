@@ -327,6 +327,28 @@ write_reports(report, root, {"json", "md", "html"})
 write_history(report, root, keep=50)
 ```
 
+The diagram renderers are importable on their own, so a host can embed the pictures
+without the surrounding document. All four are pure functions of a `ScanReport`, pure
+stdlib, and deterministic:
+
+```python
+from vibeguard.reporting.diagram import (
+    mermaid_architecture,   # str  — a `flowchart LR` block, no fences
+    svg_architecture,       # str  — inline SVG, fixed viewBox, no script or asset
+    svg_scores,             # str  — category scores as horizontal bars
+    svg_checklist,          # str  — one stacked bar per checklist section
+    graph_is_trivial,       # bool — <=1 node and no edges: render a note instead
+)
+
+svg = svg_architecture(report)      # drop straight into your own page
+```
+
+They are what the markdown report's **Architecture** section and the HTML report's
+**Architecture & health at a glance** section are built from, and what
+`vibeguard graph PATH --format mermaid|svg` prints. Node colour comes from the
+category score that governs each node kind — the mapping is a table in the
+`vibeguard.reporting.diagram` module docstring.
+
 Other entry points: `Engine(config).fix(path, "safe" | "interactive", confirm=fn)` and
 `Engine(config).ci(path) -> (report, exit_code)`. Constructor injection points —
 `events`, `registry`, `adapters`, `ai` — make the engine straightforward to test and to
