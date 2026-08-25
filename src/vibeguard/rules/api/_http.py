@@ -10,6 +10,7 @@ empty result rather than an exception.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
@@ -38,6 +39,8 @@ __all__ = [
     "repo_matches",
     "serves_http",
 ]
+
+log = logging.getLogger(__name__)
 
 _ROUTE_METHOD_NAMES = {
     "route",
@@ -133,6 +136,9 @@ def _py_function_children(node: Any) -> Any | None:
             if child.type == "function_definition":
                 return child
     except Exception:  # pragma: no cover - defensive
+        # Broad by design: this is the rule/parser boundary, and a node shape the
+        # installed tree-sitter build does not expose must not abort the scan.
+        log.debug("cannot inspect decorated definition children", exc_info=True)
         return None
     return None
 
@@ -141,6 +147,7 @@ def _is_django_view(source: bytes, func: Any) -> bool:
     try:
         params = func.child_by_field_name("parameters")
     except Exception:  # pragma: no cover - defensive
+        log.debug("cannot read function parameters from the parse tree", exc_info=True)
         return False
     if params is None:
         return False
@@ -173,7 +180,9 @@ def py_handlers(ctx: ScanContext, relpath: str) -> list[Handler]:
             decorators = [
                 node_text(source, child) for child in node.children if child.type == "decorator"
             ]
-        except Exception:  # pragma: no cover - defensive
+        except (AttributeError, TypeError, ValueError):  # pragma: no cover - defensive
+            # Narrow on purpose: these are the shapes a tree-sitter binding mismatch
+            # takes. This runs per node, so it must not log — see VG-COST-001.
             continue
         route = next((d for d in decorators if _PY_ROUTE_DECORATOR.match(d.strip())), None)
         decorated.add(func.start_byte)
@@ -255,6 +264,9 @@ def handlers(ctx: ScanContext, *, limit: int = 400) -> list[Handler]:
             else:
                 found.extend(js_handlers(ctx, rel))
         except Exception:  # pragma: no cover - defensive
+            # Broad by design: the rule/repository boundary. A scan must never
+            # die on one unreadable input — but it must not go quiet either.
+            log.debug("collecting route handlers from %s failed", rel, exc_info=True)
             continue
     return found[:limit]
 

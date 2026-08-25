@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, ClassVar
 
@@ -13,6 +14,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
 
 __all__ = ["NoEndToEndTestsRule", "NoNonFunctionalTestsRule"]
+
+log = logging.getLogger(__name__)
+
 
 _E2E_TOKENS = (
     "playwright",
@@ -86,6 +90,9 @@ class NoEndToEndTestsRule(ProjectRule):
             if any(token in haystack for token in _E2E_TOKENS):
                 return None
         except Exception:  # pragma: no cover - defensive
+            # Broad by design: the rule/repository boundary. A scan must never
+            # die on one unreadable input — but it must not go quiet either.
+            log.debug("end-to-end test search failed; skipping the check", exc_info=True)
             return None
         return (
             "No end-to-end framework (Playwright, Cypress, Selenium, Puppeteer), no "
@@ -176,6 +183,9 @@ class NoNonFunctionalTestsRule(ProjectRule):
             if len(missing) < 3:
                 return None
         except Exception:  # pragma: no cover - defensive
+            # Broad by design: the rule/repository boundary. A scan must never
+            # die on one unreadable input — but it must not go quiet either.
+            log.debug("non-functional test search failed; skipping the check", exc_info=True)
             return None
         return (
             "The test suite has no load or benchmark tests, no concurrency or "

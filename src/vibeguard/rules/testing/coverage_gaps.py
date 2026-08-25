@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, ClassVar
 
@@ -13,6 +14,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
 
 __all__ = ["NoDatabaseTestsRule", "NoIntegrationTestsRule"]
+
+log = logging.getLogger(__name__)
+
 
 _HTTP_TEST_TOKENS = (
     "testclient",
@@ -92,6 +96,9 @@ class NoIntegrationTestsRule(ProjectRule):
             if any(token in text for token in _HTTP_TEST_TOKENS):
                 return None
         except Exception:  # pragma: no cover - defensive
+            # Broad by design: the rule/repository boundary. A scan must never
+            # die on one unreadable input — but it must not go quiet either.
+            log.debug("HTTP-test search failed; skipping the check", exc_info=True)
             return None
         return (
             f"A server framework ({', '.join(sorted(ctx.tech.backend))}) is present and "
@@ -162,6 +169,9 @@ class NoDatabaseTestsRule(ProjectRule):
             if _DB_TEST_RE.search(test_text(ctx)):
                 return None
         except Exception:  # pragma: no cover - defensive
+            # Broad by design: the rule/repository boundary. A scan must never
+            # die on one unreadable input — but it must not go quiet either.
+            log.debug("database-test search failed; skipping the check", exc_info=True)
             return None
         stores = ", ".join(sorted(set(ctx.tech.databases) | set(ctx.tech.orms))) or "a database"
         return (

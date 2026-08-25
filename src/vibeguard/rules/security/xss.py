@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, ClassVar
 
@@ -23,6 +24,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
 
 __all__ = ["DomXssSinkRule", "UnescapedTemplateRenderingRule"]
+
+log = logging.getLogger(__name__)
+
 
 _TEMPLATE_SUFFIXES = (".html", ".htm", ".jinja", ".jinja2", ".j2")
 _SAFE_FILTER = re.compile(r"\{\{[^}]*\|\s*safe\b")
@@ -179,6 +183,9 @@ class DomXssSinkRule(Rule):
             try:
                 root = tree.root_node
             except Exception:  # pragma: no cover - defensive
+                # Broad by design: the rule/repository boundary. A scan must never
+                # die on one unreadable input — but it must not go quiet either.
+                log.debug("tree-sitter tree for %s has no root node", rel, exc_info=True)
                 continue
             for node in walk(root):
                 if len(findings) >= _MAX:

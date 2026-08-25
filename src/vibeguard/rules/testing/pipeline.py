@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, ClassVar
@@ -14,6 +15,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
 
 __all__ = ["CiDoesNotRunTestsRule"]
+
+log = logging.getLogger(__name__)
+
 
 _CI_SUFFIXES = {".yml", ".yaml"}
 _CI_FILE_NAMES = {".gitlab-ci.yml", ".gitlab-ci.yaml", "jenkinsfile"}
@@ -93,6 +97,9 @@ class CiDoesNotRunTestsRule(ProjectRule):
                 if _TEST_COMMAND.search(ctx.read(rel)):
                     return None
         except Exception:  # pragma: no cover - defensive
+            # Broad by design: the rule/repository boundary. A scan must never
+            # die on one unreadable input — but it must not go quiet either.
+            log.debug("CI test-command search failed; skipping the check", exc_info=True)
             return None
         listed = ", ".join(ci_files[:5])
         return (

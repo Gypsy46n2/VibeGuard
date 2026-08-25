@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, ClassVar
@@ -14,6 +15,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
 
 __all__ = ["NoErrorTrackingRule", "NoMetricsRule"]
+
+log = logging.getLogger(__name__)
 
 _ERROR_TRACKING_TOKENS = (
     "sentry",
@@ -77,6 +80,7 @@ class NoErrorTrackingRule(ProjectRule):
             if matched_tokens(haystack(ctx), _ERROR_TRACKING_TOKENS):
                 return None
         except Exception:  # pragma: no cover - defensive
+            log.debug("error-tracking search failed; skipping the check", exc_info=True)
             return None
         return (
             "No error-tracking or APM integration was detected in the dependencies or "
@@ -157,6 +161,9 @@ class NoMetricsRule(ProjectRule):
             if self._has_slo_document(ctx):
                 return None
         except Exception:  # pragma: no cover - defensive
+            # Broad by design: the rule/repository boundary. A scan must never
+            # die on one unreadable input — but it must not go quiet either.
+            log.debug("metrics/SLO search failed; skipping the check", exc_info=True)
             return None
         return (
             "No metrics client or `/metrics` endpoint was found, and no document "

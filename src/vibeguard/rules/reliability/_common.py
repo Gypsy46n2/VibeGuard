@@ -8,6 +8,7 @@ rather than raising — a rule that crashes silently loses coverage.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -19,6 +20,8 @@ from vibeguard.rules._support import (
     is_test_path,
     node_text,
 )
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
@@ -49,6 +52,9 @@ def root_of(ctx: ScanContext, relpath: str) -> Any | None:
     try:
         return tree.root_node
     except Exception:  # pragma: no cover - defensive
+        # Broad by design: the rule/repository boundary. A scan must never
+        # die on one unreadable input — but it must not go quiet either.
+        log.debug("tree-sitter tree for %s has no root node", relpath, exc_info=True)
         return None
 
 

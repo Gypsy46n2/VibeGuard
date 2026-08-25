@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, ClassVar
 
@@ -13,6 +14,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
 
 __all__ = ["NoCorrelationIdRule", "NoHealthCheckRule"]
+
+log = logging.getLogger(__name__)
 
 _HEALTH_ROUTE = re.compile(
     r"""(?ix)
@@ -74,6 +77,9 @@ class NoHealthCheckRule(ProjectRule):
             if _HEALTH_ROUTE.search(haystack(ctx)):
                 return None
         except Exception:  # pragma: no cover - defensive
+            # Rule/repository boundary: a project we cannot read is a project we
+            # cannot make a claim about, so stay silent — but say so in the log.
+            log.debug("health-route search failed; skipping VG-OBS-004", exc_info=True)
             return None
         return (
             "A server framework is configured but no health, readiness, or liveness "
@@ -151,6 +157,9 @@ class NoCorrelationIdRule(ProjectRule):
             if matched_tokens(haystack(ctx), _CORRELATION_TOKENS):
                 return None
         except Exception:  # pragma: no cover - defensive
+            # Broad by design: the rule/repository boundary. A scan must never
+            # die on one unreadable input — but it must not go quiet either.
+            log.debug("correlation-id search failed; skipping the check", exc_info=True)
             return None
         return (
             "No request-id, correlation-id, or traceparent handling was found in the "

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, ClassVar
@@ -19,6 +20,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
 
 __all__ = ["NoSecretManagementRule"]
+
+log = logging.getLogger(__name__)
+
 
 #: Evidence that secrets are handled by something purpose-built.
 _MANAGED_STORE_TOKENS = (
@@ -107,6 +111,9 @@ class NoSecretManagementRule(ProjectRule):
         try:
             return self._check(ctx)
         except Exception:  # pragma: no cover - defensive
+            # Broad by design: the rule/repository boundary. A scan must never
+            # die on one unreadable input — but it must not go quiet either.
+            log.debug("secret-management check failed; staying silent", exc_info=True)
             return None
 
     def _check(self, ctx: ScanContext) -> tuple[str, str] | None:

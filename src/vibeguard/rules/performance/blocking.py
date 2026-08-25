@@ -50,7 +50,9 @@ def _spans(nodes: list[Any]) -> list[tuple[int, int]]:
             continue
         try:
             out.append((node.start_byte, node.end_byte))
-        except Exception:  # pragma: no cover - defensive
+        except (AttributeError, TypeError, ValueError):  # pragma: no cover
+            # Narrow on purpose: these are the shapes a tree-sitter binding
+            # mismatch takes, and this runs per node so it must stay silent.
             continue
     return out
 

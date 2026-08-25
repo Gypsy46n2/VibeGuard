@@ -7,6 +7,7 @@ scanning, so each gets an explicit filter that every rule in the pack reuses.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, ClassVar
@@ -32,6 +33,9 @@ __all__ = [
     "looks_like_env_lookup",
     "split_call_args",
 ]
+
+log = logging.getLogger(__name__)
+
 
 CODE_SUFFIXES: tuple[str, ...] = PY_SUFFIXES + JS_SUFFIXES
 CONFIG_SUFFIXES: tuple[str, ...] = (
@@ -384,6 +388,9 @@ class SecretRegexRule(RegexRule):
             try:
                 text = ctx.read(rel)
             except Exception:  # pragma: no cover - ctx.read already swallows OSError
+                # Broad by design: the rule/repository boundary. A scan must never
+                # die on one unreadable input — but it must not go quiet either.
+                log.debug("unreadable file %s skipped", rel, exc_info=True)
                 continue
             if not text:
                 continue
@@ -403,6 +410,14 @@ class SecretRegexRule(RegexRule):
                     if not self.accepts(ctx, rel, line, match):
                         continue
                 except Exception:  # pragma: no cover - defensive
+                    # Broad by design: the rule/repository boundary. A scan must never
+                    # die on one unreadable input — but it must not go quiet either.
+                    log.debug(
+                        "%s guard raised on %s; dropping the match",
+                        self.id,
+                        rel,
+                        exc_info=True,
+                    )
                     continue
                 line_no = index + 1
                 per_file += 1

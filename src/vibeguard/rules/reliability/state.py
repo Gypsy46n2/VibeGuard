@@ -79,7 +79,9 @@ def _module_containers(ctx: ScanContext, rel: str, source: bytes) -> dict[str, i
         try:
             target = node.child_by_field_name("left") or node.child_by_field_name("name")
             value = node.child_by_field_name("right") or node.child_by_field_name("value")
-        except Exception:  # pragma: no cover - defensive
+        except (AttributeError, TypeError, ValueError):  # pragma: no cover
+            # Narrow on purpose: these are the shapes a tree-sitter binding
+            # mismatch takes, and this runs per node so it must stay silent.
             continue
         if target is None or value is None or target.type != "identifier":
             continue
@@ -199,7 +201,9 @@ class UnboundedCacheRule(Rule):
                 continue
             try:
                 target = node.child_by_field_name("left")
-            except Exception:  # pragma: no cover - defensive
+            except (AttributeError, TypeError, ValueError):  # pragma: no cover
+                # Narrow on purpose: these are the shapes a tree-sitter binding
+                # mismatch takes, and this runs per node so it must stay silent.
                 continue
             if target is None or target.type not in {"subscript", "member_expression"}:
                 continue

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, ClassVar
@@ -34,6 +35,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
 
 __all__ = ["DatabaseUrlCredentialsRule", "SigningSecretRule"]
+
+log = logging.getLogger(__name__)
+
 
 _DB_SCHEMES = (
     r"postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis(?:s)?|amqp(?:s)?|"
@@ -180,6 +184,9 @@ class SigningSecretRule(SecretRegexRule):
             try:
                 sites = py_calls(ctx, rel) if is_python else js_calls(ctx, rel)
             except Exception:  # pragma: no cover - defensive
+                # Broad by design: the rule/repository boundary. A scan must never
+                # die on one unreadable input — but it must not go quiet either.
+                log.debug("call extraction failed for %s", rel, exc_info=True)
                 continue
             for site in sites:
                 if len(out) >= limit:

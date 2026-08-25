@@ -172,6 +172,9 @@ def inline_suppression_for(finding: Finding, read: ReadFn) -> SuppressionEntry |
     try:
         text = read(finding.file)
     except Exception:  # pragma: no cover - reader isolation
+        # The reader is caller-supplied and may raise anything; an unreadable file
+        # simply has no inline suppression on it.
+        log.debug("suppression reader failed for %s", finding.file, exc_info=True)
         return None
     if not text:
         return None
