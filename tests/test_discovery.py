@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conftest import make_context
+from conftest import context_from, make_context
 from vibeguard.core.models import ScaleClass
 from vibeguard.discovery.files import collect_files
 from vibeguard.discovery.scale import count_loc, count_services
@@ -137,3 +137,113 @@ def test_scan_context_helpers(sample_ctx):
     assert sample_ctx.exists("app.py")
     assert not sample_ctx.exists("tests")
     assert sample_ctx.files_matching(".py") == ["app.py"]
+
+
+# ------------------------------------------- fixture/vendor exclusion (D64)
+
+
+FIXTURE_POLLUTED_REPO = {
+    "pyproject.toml": (
+        '[project]\nname = "mytool"\nversion = "0.1.0"\n'
+        'requires-python = ">=3.11"\ndependencies = ["typer>=0.12"]\n'
+    ),
+    "src/mytool/cli.py": "import typer\n\napp = typer.Typer()\n",
+    # Everything below is material the project *carries*, not what it *is*.
+    "tests/fixtures/sample_app/requirements.txt": "flask\npsycopg2\nflask-login\npyjwt\n",
+    "tests/fixtures/sample_app/app.py": (
+        "from flask import Flask\nimport psycopg2\n\napp = Flask(__name__)\n"
+    ),
+    "tests/fixtures/sample_app/docker-compose.yml": (
+        "services:\n"
+        "  web:\n    build: .\n"
+        "  db:\n    image: postgres:16\n"
+        "  cache:\n    image: redis:7\n"
+        "  proxy:\n    image: nginx\n"
+        "  worker:\n    image: app\n"
+    ),
+    "tests/fixtures/sample_app/deploy.yaml": (
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n"
+    ),
+    "examples/vulnerable-app/package.json": '{"dependencies": {"express": "^4"}}',
+    "examples/vulnerable-app/server.js": "const express = require('express');\n",
+}
+
+
+def test_split_primary_separates_fixture_material():
+    from vibeguard.discovery.paths import is_fixture_path, split_primary
+
+    files = sorted(FIXTURE_POLLUTED_REPO)
+    primary, fixture = split_primary(files)
+    assert "src/mytool/cli.py" in primary
+    assert "pyproject.toml" in primary
+    assert all(f.startswith(("tests/", "examples/")) for f in fixture)
+    assert is_fixture_path("vendor/lib/thing.py")
+    assert is_fixture_path("node_modules/x/index.js")
+    assert is_fixture_path("app/test_helpers.py")
+    assert not is_fixture_path("src/mytool/cli.py")
+
+
+def test_split_primary_falls_back_when_everything_looks_like_a_fixture():
+    """Scanning a test tree directly must still profile it, not give up."""
+    from vibeguard.discovery.paths import split_primary
+
+    files = ["tests/app.py", "tests/requirements.txt"]
+    primary, fixture = split_primary(files)
+    assert primary == files
+    assert fixture == []
+
+
+def test_fixture_material_does_not_define_the_stack(tmp_path):
+    ctx = context_from(tmp_path, FIXTURE_POLLUTED_REPO)
+    assert ctx.tech.backend == []
+    assert ctx.tech.frameworks == []
+    assert ctx.tech.databases == []
+    assert ctx.tech.auth == []
+    assert "k8s" not in ctx.tech.containers
+    # ...but the files are still there for rules to scan.
+    assert "tests/fixtures/sample_app/app.py" in ctx.files
+    assert ctx.is_fixture("tests/fixtures/sample_app/app.py")
+    assert not ctx.is_fixture("src/mytool/cli.py")
+
+
+def test_fixture_material_does_not_inflate_the_scale(tmp_path):
+    ctx = context_from(tmp_path, FIXTURE_POLLUTED_REPO)
+    assert ctx.scale.service_count == 1
+    assert ctx.scale.scale is ScaleClass.TOY
+    assert not ctx.scale.has_sensitive_data
+
+
+def test_a_fixture_tree_scanned_directly_is_primary(tmp_path):
+    """Relative-to-the-scan-root is what makes this correct in both directions."""
+    inner = {
+        rel[len("tests/fixtures/sample_app/") :]: body
+        for rel, body in FIXTURE_POLLUTED_REPO.items()
+        if rel.startswith("tests/fixtures/sample_app/")
+    }
+    ctx = context_from(tmp_path, inner)
+    assert ctx.tech.backend == ["flask"]
+    assert "postgres" in ctx.tech.databases
+    assert ctx.scale.service_count >= 5
+
+
+def test_fixture_paths_config_extends_the_defaults(tmp_path):
+    from vibeguard.core.config import VibeguardConfig
+
+    config = VibeguardConfig.from_dict(
+        {"vibeguard": {"fixture_paths": ["playground"]}}
+    )
+    assert "playground" in config.fixture_paths
+    assert "tests" in config.fixture_paths  # defaults are extended, not replaced
+
+    ctx = context_from(
+        tmp_path,
+        {
+            "pyproject.toml": '[project]\nname = "t"\nversion = "0"\n',
+            "src/t/__init__.py": "",
+            "playground/requirements.txt": "django\n",
+            "playground/manage.py": "import django\n",
+        },
+        config,
+    )
+    assert ctx.tech.backend == []
+    assert ctx.is_fixture("playground/manage.py")
