@@ -70,6 +70,7 @@ from vibeguard.engine.orchestrator import (
 )
 from vibeguard.fixers.git_safety import DirtyWorktreeError, GitSafetyError, NoGitRepoError
 from vibeguard.reporting import JSON_FILENAME, write_json, write_reports
+from vibeguard.reporting.diagram import mermaid_architecture, svg_architecture
 from vibeguard.validation.engine import ValidationEngine
 
 __all__ = ["app", "main"]
@@ -720,6 +721,76 @@ def ci(
     else:
         console.print(f"[green]CI gate passed:[/] no findings at or above '{threshold}'.")
     raise typer.Exit(exit_code)
+
+
+class GraphFormat(str, Enum):
+    MERMAID = "mermaid"
+    SVG = "svg"
+
+
+@app.command()
+def graph(
+    path: Annotated[Path, typer.Argument(help="Repository to diagram.")] = Path("."),
+    fmt: Annotated[
+        GraphFormat, typer.Option("--format", help="Diagram syntax to emit.")
+    ] = GraphFormat.MERMAID,
+    out: Annotated[
+        Path | None, typer.Option("--out", help="Write to this file instead of stdout.")
+    ] = None,
+) -> None:
+    """Draw the inferred architecture — discovery only, no rule detection.
+
+    Fast by design: it walks the repository, profiles the stack and infers the graph,
+    but runs no rules. If a previous scan is recorded under ``.vibeguard/history/``
+    its category scores colour the nodes; otherwise every node is drawn neutral,
+    because an unmeasured node must not look like a healthy one.
+    """
+    root = path.resolve()
+    config = _load_config(root)
+    try:
+        ctx = Engine(config).build_context(root)
+    except NotADirectoryError as exc:
+        err_console.print(f"[red]error:[/] {exc}")
+        raise typer.Exit(EXIT_ERROR) from exc
+
+    stored = latest_history(root)
+    scan = ScanReport(
+        repo=str(root),
+        scan_date=datetime.now(UTC),
+        vibeguard_version=__version__,
+        mode="graph",
+        tech=ctx.tech,
+        scale=ctx.scale,
+        graph=ctx.graph,
+        scores_before=list(stored.scores_before) if stored else [],
+        scores_after=list(stored.scores_after) if stored and stored.scores_after else None,
+        overall_before=stored.overall_before if stored else 0,
+        overall_after=stored.overall_after if stored else None,
+    )
+
+    text = (
+        mermaid_architecture(scan) if fmt is GraphFormat.MERMAID else svg_architecture(scan)
+    )
+    if out is not None:
+        try:
+            out.write_text(text + "\n", encoding="utf-8")
+        except OSError as exc:
+            err_console.print(f"[red]error:[/] could not write {out}: {exc}")
+            raise typer.Exit(EXIT_ERROR) from exc
+        console.print(f"diagram written to [bold]{out}[/]")
+    else:
+        sys.stdout.write(text + "\n")
+
+    colouring = (
+        f"coloured from the scan of {stored.scan_date.isoformat(timespec='seconds')}"
+        if stored
+        else "neutral colouring — no recorded scan to take scores from"
+    )
+    err_console.print(
+        f"[dim]{len(ctx.graph.nodes)} node(s), {len(ctx.graph.edges)} edge(s); "
+        f"{colouring}.[/]"
+    )
+    raise typer.Exit(EXIT_OK)
 
 
 @baseline_app.command("create")
