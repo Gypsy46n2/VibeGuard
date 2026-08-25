@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import fnmatch
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
-__all__ = ["collect_files", "is_probably_binary", "load_gitignore_patterns", "SOURCE_EXTENSIONS"]
+__all__ = [
+    "ProgressFn",
+    "collect_files",
+    "is_probably_binary",
+    "load_gitignore_patterns",
+    "SOURCE_EXTENSIONS",
+]
+
+#: ``(files_processed, total_or_None, detail)`` — see ``scan.discovery_progress``.
+ProgressFn = Callable[[int, int | None, str], None]
 
 #: Extension -> language name, used for both language counts and LOC.
 SOURCE_EXTENSIONS: dict[str, str] = {
@@ -115,13 +125,23 @@ def _matches(relpath: str, patterns: list[str]) -> bool:
     return False
 
 
-def collect_files(root: Path, exclude: list[str] | None = None) -> list[str]:
-    """Return POSIX-relative paths of candidate text files under ``root``."""
+def collect_files(
+    root: Path, exclude: list[str] | None = None, progress: ProgressFn | None = None
+) -> list[str]:
+    """Return POSIX-relative paths of candidate text files under ``root``.
+
+    ``progress`` is called as the walk advances so a caller can show something other
+    than a frozen spinner on a large tree; it is throttled by the caller, not here.
+    """
     patterns = list(exclude or []) + load_gitignore_patterns(root)
     results: list[str] = []
+    walked = 0
     for path in sorted(root.rglob("*")):
         if path.is_dir():
             continue
+        walked += 1
+        if progress is not None:
+            progress(walked, None, path.name)
         try:
             rel = path.relative_to(root).as_posix()
         except ValueError:  # pragma: no cover - defensive

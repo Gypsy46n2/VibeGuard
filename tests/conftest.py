@@ -24,6 +24,7 @@ from vibeguard.core.models import (
 from vibeguard.discovery.context import ScanContext
 from vibeguard.discovery.files import collect_files
 from vibeguard.discovery.graph import build_graph
+from vibeguard.discovery.paths import split_primary
 from vibeguard.discovery.scale import detect_scale
 from vibeguard.discovery.tech import detect_tech
 
@@ -42,11 +43,19 @@ def make_context(root: Path, config: VibeguardConfig | None = None) -> ScanConte
         except OSError:
             return ""
 
-    tech = detect_tech(root, files, read)
-    scale = detect_scale(root, files, read, tech)
-    graph = build_graph(root, files, read, tech)
+    # Mirror Engine.build_context exactly: profiles come from primary files only.
+    primary, _ = split_primary(files, config.fixture_paths)
+    tech = detect_tech(root, primary, read)
+    scale = detect_scale(root, primary, read, tech)
+    graph = build_graph(root, primary, read, tech)
     return ScanContext(
-        root=root, files=files, tech=tech, graph=graph, scale=scale, config=config
+        root=root,
+        files=files,
+        primary_files=primary,
+        tech=tech,
+        graph=graph,
+        scale=scale,
+        config=config,
     )
 
 

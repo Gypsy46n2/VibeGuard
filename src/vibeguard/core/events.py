@@ -52,11 +52,21 @@ EVENT_NAMES: tuple[str, ...] = (
 #:     Emitted by the repro-test generator (``vibeguard.testing``).
 #:     Payload: ``finding``, ``rule_id``, ``path`` (+ ``phase``, ``passed`` for the
 #:     result).
+#: ``scan.discovery_progress``
+#:     Emitted repeatedly *during* discovery, which is otherwise a silent minute on a
+#:     large tree. Throttled to at most one event every 250 ms or 250 files, whichever
+#:     comes first, so a subscriber cannot be flooded.
+#:     Payload: ``phase`` (the ``scan.stage`` name this refines, e.g.
+#:     ``"discovery.files"``), ``files`` (count processed so far), ``total`` (the
+#:     denominator when one is known, else ``None``), and ``detail`` (a short
+#:     human-readable note, usually the current path). Purely additive: a subscriber
+#:     that only knows §6 never matches it (DECISIONS.md D41, D70).
 EXTENSION_EVENT_NAMES: tuple[str, ...] = (
     "ai.external_send",
     "ai.blocked",
     "repro.generated",
     "repro.result",
+    "scan.discovery_progress",
 )
 
 #: Every name VibeGuard can emit.

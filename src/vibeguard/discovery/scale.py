@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from vibeguard.core.models import ScaleClass, ScaleProfile, TechProfile
-from vibeguard.discovery.files import SOURCE_EXTENSIONS
+from vibeguard.discovery.files import SOURCE_EXTENSIONS, ProgressFn
 
 __all__ = ["detect_scale", "count_loc", "count_services"]
 
@@ -51,12 +51,16 @@ _MAX_SENSITIVE_SCAN_FILES = 400
 _COMPOSE_NAMES = {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
 
 
-def count_loc(files: list[str], read: Reader) -> int:
+def count_loc(files: list[str], read: Reader, progress: ProgressFn | None = None) -> int:
     """Total non-empty lines across recognised source files."""
     total = 0
+    counted = 0
     for rel in files:
         if PurePosixPath(rel).suffix.lower() not in SOURCE_EXTENSIONS:
             continue
+        counted += 1
+        if progress is not None:
+            progress(counted, None, rel)
         text = read(rel)
         total += sum(1 for line in text.splitlines() if line.strip())
     return total
@@ -123,10 +127,14 @@ def _has_sensitive_data(
 
 
 def detect_scale(
-    root: Path, files: list[str], read: Reader, tech: TechProfile
+    root: Path,
+    files: list[str],
+    read: Reader,
+    tech: TechProfile,
+    progress: ProgressFn | None = None,
 ) -> ScaleProfile:
     """Classify project size from LOC, service count, and infrastructure signals."""
-    loc = count_loc(files, read)
+    loc = count_loc(files, read, progress)
     services = count_services(files, read)
     sensitive, sensitive_reasons = _has_sensitive_data(files, read, tech)
 

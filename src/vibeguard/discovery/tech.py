@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
 from vibeguard.core.models import TechProfile
-from vibeguard.discovery.files import SOURCE_EXTENSIONS
+from vibeguard.discovery.files import SOURCE_EXTENSIONS, ProgressFn
 
 __all__ = ["detect_tech"]
 
@@ -210,7 +210,9 @@ def _js_imports(text: str) -> Iterable[str]:
         yield parts[0] if not module.startswith("@") else "/".join(parts[:2])
 
 
-def detect_tech(root: Path, files: list[str], read: Reader) -> TechProfile:
+def detect_tech(
+    root: Path, files: list[str], read: Reader, progress: ProgressFn | None = None
+) -> TechProfile:
     """Build a :class:`TechProfile` from manifests, config files, and imports."""
     lists: dict[str, list[str]] = {}
     languages: dict[str, int] = {}
@@ -353,6 +355,8 @@ def detect_tech(root: Path, files: list[str], read: Reader) -> TechProfile:
         if inspected >= _MAX_INSPECTED_SOURCE_FILES:
             break
         inspected += 1
+        if progress is not None:
+            progress(inspected, min(len(files), _MAX_INSPECTED_SOURCE_FILES), rel)
         text = read(rel)
         tokens = _python_imports(text) if ext in {".py", ".pyi"} else _js_imports(text)
         for token in tokens:

@@ -67,9 +67,17 @@ def _is_named(rel: str, *names: str) -> bool:
 
 
 def python_manifests(ctx: ScanContext) -> list[str]:
-    """``requirements*.txt`` and ``pyproject.toml`` paths."""
+    """``requirements*.txt`` and ``pyproject.toml`` paths for *this* project.
+
+    Manifests under ``tests/``, ``examples/``, and vendored trees are excluded: they
+    declare the dependencies of a fixture, not of the project being audited, and
+    letting them answer "is there a lockfile?" or "is the runtime pinned?" produces
+    findings about somebody else's requirements file (DECISIONS.md D64).
+    """
     out: list[str] = []
     for rel in ctx.files:
+        if ctx.is_fixture(rel):
+            continue
         name = PurePosixPath(rel).name.lower()
         if name == "pyproject.toml" or (name.startswith("requirements") and name.endswith(".txt")):
             out.append(rel)
@@ -77,11 +85,13 @@ def python_manifests(ctx: ScanContext) -> list[str]:
 
 
 def node_manifests(ctx: ScanContext) -> list[str]:
-    """``package.json`` paths, excluding vendored trees."""
+    """``package.json`` paths for this project, excluding fixture and vendored trees."""
     return [
         rel
         for rel in ctx.files
-        if _is_named(rel, "package.json") and "node_modules" not in rel.split("/")
+        if _is_named(rel, "package.json")
+        and "node_modules" not in rel.split("/")
+        and not ctx.is_fixture(rel)
     ][:20]
 
 

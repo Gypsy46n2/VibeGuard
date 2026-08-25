@@ -23,6 +23,17 @@ __all__ = [
 
 CONFIG_FILENAME = ".vibeguard.toml"
 
+
+def _default_fixture_paths() -> list[str]:
+    """The built-in fixture-path list.
+
+    Imported lazily: ``vibeguard.discovery`` pulls in the AI gateway, which pulls in
+    this module, so a top-level import would be circular.
+    """
+    from vibeguard.discovery.paths import DEFAULT_FIXTURE_PATHS
+
+    return list(DEFAULT_FIXTURE_PATHS)
+
 DEFAULT_PACKS: list[str] = [
     "core",
     "secrets",
@@ -108,6 +119,11 @@ class VibeguardConfig(BaseModel):
 
     packs: list[str] = Field(default_factory=lambda: list(DEFAULT_PACKS))
     exclude: list[str] = Field(default_factory=lambda: list(DEFAULT_EXCLUDES))
+    #: Paths whose contents are test, fixture, example, or vendored material. These
+    #: files are still **scanned** — a real defect in ``tests/`` is still a defect —
+    #: but they never define the project's technology stack or its scale. File values
+    #: extend the built-in defaults rather than replacing them.
+    fixture_paths: list[str] = Field(default_factory=_default_fixture_paths)
     local_only: bool = False
     ai: AIConfig = Field(default_factory=AIConfig)
     ci: CIConfig = Field(default_factory=CIConfig)
@@ -158,6 +174,10 @@ class VibeguardConfig(BaseModel):
         if "exclude" in main:
             # File excludes extend the built-in defaults rather than replacing them.
             data["exclude"] = list(dict.fromkeys(DEFAULT_EXCLUDES + list(main["exclude"])))
+        if "fixture_paths" in main:
+            data["fixture_paths"] = list(
+                dict.fromkeys(_default_fixture_paths() + list(main["fixture_paths"]))
+            )
         if "local_only" in main:
             data["local_only"] = bool(main["local_only"])
         if "report_dir" in main:

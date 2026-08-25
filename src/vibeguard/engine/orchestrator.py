@@ -13,6 +13,7 @@ D8, D32), so ``audit`` remains a pure function of the repository.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,8 +45,9 @@ from vibeguard.core.models import (
 from vibeguard.core.registry import RuleRegistry, build_registry
 from vibeguard.core.rule import Rule
 from vibeguard.discovery.context import ScanContext
-from vibeguard.discovery.files import collect_files
+from vibeguard.discovery.files import ProgressFn, collect_files
 from vibeguard.discovery.graph import build_graph
+from vibeguard.discovery.paths import split_primary
 from vibeguard.discovery.scale import detect_scale
 from vibeguard.discovery.tech import detect_tech
 from vibeguard.engine.checklist import DetectorInfo, derive_checklist
@@ -55,6 +57,10 @@ from vibeguard.reporting.scoring import score_findings
 from vibeguard.validation.engine import ValidationEngine
 
 __all__ = ["Engine", "EXIT_OK", "EXIT_FINDINGS", "EXIT_ERROR", "EXIT_DIRTY_WORKTREE"]
+
+#: ``scan.discovery_progress`` throttle: emit no more often than this.
+_PROGRESS_EVERY_FILES = 250
+_PROGRESS_EVERY_SECONDS = 0.25
 
 log = logging.getLogger(__name__)
 
@@ -129,6 +135,36 @@ class Engine:
         return self._ai
 
     # ------------------------------------------------------------- discovery
+    def _progress(self, phase: str) -> ProgressFn:
+        """A throttled ``scan.discovery_progress`` emitter for one discovery phase.
+
+        Discovery is the one part of a scan that can sit silent for a minute on a big
+        tree. The event is additive (DECISIONS.md D70) and rate-limited here rather
+        than in the discovery functions, so they stay free of policy: at most one
+        event per ``_PROGRESS_EVERY_FILES`` files or ``_PROGRESS_EVERY_SECONDS``,
+        whichever comes first, plus nothing at all when no one is subscribed.
+        """
+        state = {"count": 0, "at": 0.0}
+
+        def emit(processed: int, total: int | None, detail: str) -> None:
+            now = time.monotonic()
+            if (
+                processed - state["count"] < _PROGRESS_EVERY_FILES
+                and now - state["at"] < _PROGRESS_EVERY_SECONDS
+            ):
+                return
+            state["count"] = processed
+            state["at"] = now
+            self.events.emit(
+                "scan.discovery_progress",
+                phase=phase,
+                files=processed,
+                total=total,
+                detail=detail,
+            )
+
+        return emit
+
     def build_context(self, path: str | Path) -> ScanContext:
         """Run discovery and return the ScanContext handed to rules."""
         root = Path(path).resolve()
@@ -136,7 +172,7 @@ class Engine:
             raise NotADirectoryError(f"not a directory: {root}")
 
         self.events.emit("scan.stage", stage="discovery.files")
-        files = collect_files(root, self.config.exclude)
+        files = collect_files(root, self.config.exclude, self._progress("discovery.files"))
 
         cache: dict[str, str] = {}
 
@@ -150,16 +186,23 @@ class Engine:
                 cache[rel] = cached
             return cached
 
+        # Test, example, and vendored trees are scanned like everything else, but they
+        # do not get to say what this project *is*: profiling VibeGuard's own fixtures
+        # as its stack made a Python CLI look like a 37k-LOC Flask/Express/k8s
+        # deployment (DECISIONS.md D64).
+        primary, _fixture = split_primary(files, self.config.fixture_paths)
+
         self.events.emit("scan.stage", stage="discovery.tech")
-        tech = detect_tech(root, files, read)
+        tech = detect_tech(root, primary, read, self._progress("discovery.tech"))
         self.events.emit("scan.stage", stage="discovery.scale")
-        scale = detect_scale(root, files, read, tech)
+        scale = detect_scale(root, primary, read, tech, self._progress("discovery.scale"))
         self.events.emit("scan.stage", stage="discovery.graph")
-        graph = build_graph(root, files, read, tech)
+        graph = build_graph(root, primary, read, tech)
 
         ctx = ScanContext(
             root=root,
             files=files,
+            primary_files=primary,
             tech=tech,
             graph=graph,
             scale=scale,

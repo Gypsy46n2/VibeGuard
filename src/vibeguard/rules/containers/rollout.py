@@ -100,9 +100,18 @@ class NoProgressiveRolloutRule(ProjectRule):
 
     @staticmethod
     def _orchestrator(ctx: ScanContext) -> str:
-        if workload_documents(ctx):
+        """How *this project* is deployed.
+
+        Fixture and example manifests are excluded: a Kubernetes Deployment that only
+        exists to be a test's input does not mean the project is orchestrated with
+        Kubernetes, and reading it that way switched on a whole family of rollout and
+        scaling rules for a CLI (DECISIONS.md D64).
+        """
+        if [(rel, doc) for rel, doc in workload_documents(ctx) if not ctx.is_fixture(rel)]:
             return "kubernetes"
         for rel in compose_files(ctx):
+            if ctx.is_fixture(rel):
+                continue
             if len(compose_services(ctx, rel)) > 1:
                 return "docker-compose"
         return ""
