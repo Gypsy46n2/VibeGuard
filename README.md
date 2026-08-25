@@ -9,7 +9,7 @@
 [![version](https://img.shields.io/badge/version-0.2.0-2f7fd6)](https://github.com/Gypsy46n2/VibeGuard/releases)
 [![python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](pyproject.toml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-4c9a2a)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-1090%20passing-4c9a2a)](tests/)
+[![tests](https://img.shields.io/badge/tests-1103%20passing-4c9a2a)](tests/)
 [![rules](https://img.shields.io/badge/rules-117-6b47c9)](docs/RULES.md)
 [![checklist](https://img.shields.io/badge/checklist-279%20topics-6b47c9)](docs/RULES.md)
 
@@ -36,6 +36,24 @@ Three rules it never breaks:
 2. **Never make a high-risk change without approval.**
 3. **Never overengineer.** Recommendations are proportional to the project — a 150-line
    CRUD app is never told to adopt Kubernetes, sharding, or a service mesh.
+
+## Read-only by default
+
+`vibeguard audit` reads your code and writes a report. It never edits a file, never
+creates a branch, never commits. Repairs happen only when you ask for them by name —
+`vibeguard fix`, on its own branch, one validated commit per fix.
+
+The only thing an audit leaves behind is its own output: `vibeguard-report.*` and
+`.vibeguard/` (history, baseline). Both can be moved or switched off:
+
+```bash
+vibeguard audit .  --report-dir /tmp/scan   # reports and .vibeguard/ land there, not here
+vibeguard audit .  --no-write               # prints the table, writes nothing at all
+vibeguard ci .     --no-write               # still gates; leaves zero footprint
+```
+
+Scanning someone else's repository, a read-only checkout, or a CI workspace you would
+rather keep pristine is a supported case, not a workaround.
 
 ## Install
 
@@ -196,6 +214,13 @@ Common flags: `--output table,json,jsonl,md,html,all` · `--local-only` · `--pa
 `--deep` (audit) · `--safe` / `--interactive` / `--deep-validate` / `--allow-no-git`
 (fix) · `--fail-on` / `--baseline` (ci) · `--format mermaid|svg` / `--out` (graph).
 
+Footprint flags: `--report-dir DIR` (audit, fix, ci, report, `baseline create|show`)
+writes the reports *and* `DIR/.vibeguard/` there instead of into the repository, and
+`--no-write` (audit, ci) writes nothing anywhere. History follows the reports, so the
+regression diff and `vibeguard report --report-dir DIR` read from the same place.
+Set it once with `report_dir = "…"` under `[vibeguard]` in `.vibeguard.toml`; the flag
+wins over the file.
+
 Exit codes: `0` ok · `1` findings at or above the threshold · `2` execution error ·
 `3` refused, dirty git worktree.
 
@@ -271,6 +296,10 @@ numbers, so they survive reformatting and unrelated edits.
 * **Regression diff** — `N new / N resolved / N regressed / N unchanged` against
   `.vibeguard/history/`, where *regressed* means "fixed, then came back".
 
+Under `--report-dir DIR` all three live in `DIR/.vibeguard/` and are read from there,
+so runs given that directory compare against each other. Suppressions are authored by
+you and are always read from the repository itself.
+
 ## CI
 
 A composite GitHub Action ships in [`action.yml`](action.yml):
@@ -344,7 +373,7 @@ tests assert against — deliberately broken, and excluded from linting. Do not 
 
 **0.2.0 — MVP complete.** 117 rules across 16 packs (20 are registered; 4 language
 packs are reserved and empty), 8 external adapters, the 279-topic master checklist,
-and 1090 tests.
+and 1103 tests.
 
 Post-MVP: more language packs, deeper k8s/IaC coverage, LLM-assisted cross-file
 analysis, PR-comment integration, a web dashboard.

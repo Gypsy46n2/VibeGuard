@@ -215,16 +215,20 @@ leave the machine, the CLI says so explicitly before sending.
 
 ```
 vibeguard audit  PATH [--deep] [--packs ...] [--local-only] [--output md|json|html|jsonl]
+                      [--report-dir DIR] [--no-write]
 vibeguard fix    PATH [--safe | --interactive] [--local-only] [--allow-no-git]
-vibeguard report PATH            # re-render last scan
-vibeguard ci     PATH [--fail-on high] [--baseline]
-vibeguard baseline create|show PATH
+                      [--report-dir DIR]
+vibeguard report PATH [--report-dir DIR]     # re-render last scan
+vibeguard ci     PATH [--fail-on high] [--baseline] [--report-dir DIR] [--no-write]
+vibeguard baseline create|show PATH [--report-dir DIR]
 vibeguard doctor                 # which adapters/validators are available
 vibeguard rules  [--pack X]      # list rules with applicability
 ```
 
 Config: `.vibeguard.toml` at repo root (packs, thresholds, suppressor policy, AI
-provider, validators), overridable by flags.
+provider, validators, `report_dir`), overridable by flags. `--report-dir` relocates
+every written artefact — reports and `.vibeguard/` state alike — and `--no-write`
+suppresses all of them (D59, D60).
 
 ## 12. Roadmap
 

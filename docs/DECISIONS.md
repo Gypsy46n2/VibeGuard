@@ -532,3 +532,33 @@ and stops — no rule selection, no detection, no adapters. Colouring therefore 
 from `.vibeguard/history/` if a scan is recorded there, and is neutral if not. A
 `graph` invocation never writes a report, never records history, and never fails a
 build; it prints a diagram to stdout or the file named by `--out`.
+
+### D59. Where a run writes is separate from what it writes
+
+`--output` says which artefacts exist; `--report-dir DIR` says where they land, and
+`--no-write` says nowhere. Reports and the `.vibeguard/` state directory move
+*together* — history, baseline, and the rendered files — because a report directory
+whose history stayed behind in the repository would still be a footprint, and a
+regression diff that read one place while writing another would drift silently. So the
+rule is one directory per run: `config.state_root(root)` is the single answer to "where
+does this run's memory live", used by the CLI for writes and by the engine for its
+baseline and history *reads*.
+
+`.vibeguard.toml` and `.vibeguard/suppressions.yml` are the exception, and stay in the
+scanned repository: they are authored by the team being audited, not produced by the
+scan. Reading a repository is not a footprint. A relative `report_dir` in the config
+file resolves against that file's directory (it describes a project), while a relative
+`--report-dir` resolves against the shell's cwd (it describes an invocation).
+
+### D60. `--no-write` gates from memory, and says what that costs
+
+`vibeguard ci --no-write` reaches its verdict from the in-memory report, so the exit
+code is identical to a writing run — the gate never depended on the files. What it does
+lose is the record: nothing is appended to history, so the run is invisible to the next
+run's regression diff. That is printed rather than left to be discovered, because a
+silently missing comparison looks exactly like a clean one. `--no-write` also declines
+to create the `--report-dir` when both are given: "writes nothing at all" cannot make
+an exception for an empty directory.
+
+`fix` has no `--no-write`. Its whole purpose is to change the repository, and a fix run
+that refused to record what it changed would be a worse trade than not running it.

@@ -123,6 +123,8 @@ What each row means for you:
 packs      = ["security", "secrets", "api", "database", "containers"]  # default: all
 exclude    = ["docs/generated/**"]     # extends the built-in excludes, never replaces
 local_only = false
+report_dir = "../vibeguard-out"        # default: the scanned repository itself.
+                                       # Relative paths resolve against this file.
 
 [ai]
 provider    = "null"            # null | anthropic | openai_compatible
@@ -149,6 +151,27 @@ keep    = 50                    # 0 keeps everything
 `.gitignore` is always honoured on top of `exclude`, and VibeGuard's own outputs
 (`.vibeguard/`, `vibeguard-report.*`) are always excluded — a previous run's findings
 must never become this run's evidence.
+
+### Scanning without leaving anything behind
+
+Auditing never modifies the code it reads. What it does write — the report files and
+`.vibeguard/` — can be moved or switched off entirely:
+
+| Flag | Commands | Effect |
+|---|---|---|
+| `--report-dir DIR` | `audit`, `fix`, `ci`, `report`, `baseline create\|show` | Every written artefact goes to `DIR` instead of the repository: `vibeguard-report.{json,md,html}`, `DIR/.vibeguard/history/`, `DIR/.vibeguard/baseline.json`. `DIR` is created if missing. Overrides `report_dir` in the config file. |
+| `--no-write` | `audit`, `ci` | Writes nothing at all — no reports, no history, and not even the `--report-dir` itself. The terminal table and `-o jsonl`/`-o json` still work, and `ci` still gates. |
+
+Because history moves with the reports, the regression diff compares against
+whichever directory the run was given: `vibeguard audit . --report-dir /tmp/out` twice
+in a row diffs the second run against the first, and `vibeguard report . --report-dir
+/tmp/out` re-renders it — all without the repository ever being written to. Pass the
+same `--report-dir` consistently, or put `report_dir` in `.vibeguard.toml` so you
+cannot forget. `.vibeguard.toml` and `.vibeguard/suppressions.yml` are authored
+content and are always *read* from the scanned repository; only writes relocate.
+
+A `--no-write` run records nothing, so it is invisible to the next run's regression
+diff — the output says so rather than leaving you to notice.
 
 ## Troubleshooting
 
