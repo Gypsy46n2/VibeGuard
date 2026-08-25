@@ -1,17 +1,34 @@
+<div align="center">
+
+<img src="docs/assets/vibeguard-mascot-small.png" alt="VibeGuard mascot — a goat in a hoodie reviewing code behind a shield" width="360">
+
 # VibeGuard
 
-> Audits, repairs, hardens, tests, and reports on vibe-coded applications, bringing
-> them closer to production grade.
+**Production hardening for vibe-coded apps.**
+
+[![version](https://img.shields.io/badge/version-0.2.0-2f7fd6)](https://github.com/Gypsy46n2/VibeGuard/releases)
+[![python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](pyproject.toml)
+[![license](https://img.shields.io/badge/license-Apache--2.0-4c9a2a)](LICENSE)
+[![tests](https://img.shields.io/badge/tests-1090%20passing-4c9a2a)](tests/)
+[![rules](https://img.shields.io/badge/rules-117-6b47c9)](docs/RULES.md)
+[![checklist](https://img.shields.io/badge/checklist-279%20topics-6b47c9)](docs/RULES.md)
 
 **Detect → Explain → Repair → Test → Validate → Report**
+
+</div>
+
+---
+
+## What it does
 
 An LLM will happily write you a working app in an afternoon. It will not tell you that
 the login query is an f-string, that the session tokens come from `random`, that the
 container runs as root with no healthcheck, that nothing is pinned, or that the deploy
-workflow ships to production without running a test. VibeGuard finds those, explains
-why each one matters, repairs the ones it can prove are safe, writes a test that fails
-before the repair and passes after, and refuses — loudly — to claim anything it cannot
-demonstrate.
+workflow ships to production without running a test.
+
+VibeGuard finds those, explains why each one matters, repairs the ones it can prove are
+safe, writes a test that fails before the repair and passes after, and refuses —
+loudly — to claim anything it cannot demonstrate.
 
 Three rules it never breaks:
 
@@ -22,18 +39,26 @@ Three rules it never breaks:
 
 ## Install
 
-```bash
-pipx install vibeguard          # recommended: isolated, on your PATH
-pip install vibeguard
-pip install "vibeguard[scanners]"   # + bandit, detect-secrets, pip-audit, checkov, semgrep
-pip install "vibeguard[ai]"         # + the optional AI providers
+Requires **Python ≥3.11** and nothing else. Every built-in rule is regex, AST, or
+config parsing, and runs with zero installs and zero network.
 
-docker run --rm -v "$PWD":/repo ghcr.io/vibeguard/vibeguard audit /repo
+```bash
+pipx install git+https://github.com/Gypsy46n2/VibeGuard.git     # CLI on your PATH
+pip  install git+https://github.com/Gypsy46n2/VibeGuard.git     # into a virtualenv
+
+# optional extras
+pip install "vibeguard[scanners] @ git+https://github.com/Gypsy46n2/VibeGuard.git"
 ```
 
-Nothing external is required. Every built-in rule is regex, AST, or config parsing and
-runs with zero installs and zero network. External scanners are *merged in* when they
-happen to be present. See [docs/INSTALL.md](docs/INSTALL.md).
+`[scanners]` adds bandit, detect-secrets, pip-audit, checkov, and semgrep; `[ai]` adds
+the optional AI providers. External scanners are *merged in* when they happen to be
+present — none of them is required. There is also a `Dockerfile`:
+
+```bash
+docker build -t vibeguard . && docker run --rm -v "$PWD":/repo vibeguard audit /repo
+```
+
+Full matrix, adapter notes, and `vibeguard doctor` in [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Quickstart
 
@@ -42,6 +67,16 @@ vibeguard audit examples/vulnerable-app
 ```
 
 ```
+                           Detected stack
+languages         python (3)
+frameworks        flask
+databases         postgres, sqlite
+package managers  pip
+containers        docker, compose
+ci/cd             github-actions
+auth              jwt
+scale             small — 146 LOC, 1 service(s), sensitive data: True
+
 Findings by severity            Category scores (overall 55/100)
 ┏━━━━━━━━━━┳━━━━━━━┓            ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━┓
 ┃ severity ┃ count ┃            ┃ category          ┃ score ┃ findings ┃
@@ -54,7 +89,7 @@ Findings by severity            Category scores (overall 55/100)
 │ total    │    77 │            │ …                 │       │          │
 └──────────┴───────┘            └───────────────────┴───────┴──────────┘
 
-          Master audit checklist (279 topics across 18 sections)
+            Master audit checklist (279 topics across 18 sections)
 ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
 ┃ section           ┃ pass ┃ fail ┃ fixed ┃ review_required ┃ not_applicable ┃
 ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
@@ -62,14 +97,15 @@ Findings by severity            Category scores (overall 55/100)
 │ containers        │    · │    8 │     · │               · │             13 │
 │ distributed       │    · │    · │     · │               · │             18 │
 │ …                 │      │      │       │                 │                │
-│ all               │   54 │   99 │     · │              21 │            104 │
+│ all               │   54 │  100 │     0 │              21 │            104 │
 └───────────────────┴──────┴──────┴───────┴─────────────────┴────────────────┘
+review_required includes topics with no automated detector yet — never silently passed.
 
-│ VG-SEC-001   │ critical │ app.py:49  │ SQL injection via interpolated query   │
-│ VG-SEC-010   │ high     │ app.py:32  │ Weak cryptographic primitive           │
-│ VG-SEC-011   │ high     │ app.py:38  │ Cryptographically unsafe randomness    │
-│ VG-SEC-015   │ high     │ app.py:21  │ Permissive CORS configuration          │
-│ VG-CTR-001   │ high     │ Dockerfile │ Container runs as root                 │
+│ VG-SEC-001   │ critical │ app.py:50              │ SQL injection via interpolated query │
+│ VG-SCR-008   │ critical │ app.py:25              │ Hardcoded application or JWT secret  │
+│ VG-SEC-011   │ high     │ app.py:39              │ Cryptographically unsafe randomness  │
+│ VG-SEC-015   │ high     │ app.py:21              │ Permissive CORS configuration        │
+│ VG-CTR-001   │ high     │ Dockerfile:2           │ Container runs as root               │
 ```
 
 Then repair what is provably safe:
@@ -79,8 +115,69 @@ vibeguard fix examples/vulnerable-app --safe
 ```
 
 Each repair lands on its own commit on a `vibeguard/fix-YYYY-MM-DD` branch, with a
-generated repro test as its evidence. See
-[`examples/repaired-app/`](examples/repaired-app/) for a real run and its report.
+generated repro test as its evidence.
+
+## What `fix` actually repairs
+
+Autofix is deliberately narrow, and the README will not pretend otherwise. Of the 117
+rules, **14 ship a deterministic `fix()`**:
+
+| Safety class | Rules with a `fix()` | Applied by `--safe` | Applied by `--interactive` |
+|---|---|---|---|
+| `SAFE_AUTOFIX` | 2 | yes, unattended | yes |
+| `REVIEW_RECOMMENDED` | 12 | no | yes, one diff at a time, on approval |
+| `MANUAL_CHANGE_REQUIRED` / `INFORMATIONAL` | 0 | never | never |
+
+So `--safe` is a conservative pass, not a magic wand. On
+[`examples/repaired-app/`](examples/repaired-app/) — a real, reproducible run — it
+applied and validated **5 repairs**, taking findings 77 → 72 and the overall score
+55 → 57 (the `api` category 47 → 80). Everything else is reported for a human. That
+directory exists specifically to show where automation stops and hands you the work.
+
+## Architecture, drawn from your code
+
+Every markdown report opens with an **Architecture** section: the app, its datastores,
+and the third-party hosts it calls, as a mermaid `flowchart LR` that GitHub and GitLab
+render inline. Nodes are coloured by the category score that governs them — green at
+85 and above, amber from 60, red below, grey when nothing measured it. Real output for
+`examples/vulnerable-app`:
+
+```mermaid
+flowchart LR
+  subgraph g1["app / services"]
+    direction TB
+    n0["vulnerable-app"]
+  end
+  subgraph g2["data #38; infrastructure"]
+    direction TB
+    n1[("postgres")]
+    n2[("sqlite")]
+  end
+  subgraph g3["external"]
+    direction TB
+    n3(["billing.example.com"])
+    n4(["search.example.com"])
+    n5(["avatars.example.com"])
+  end
+  n0 -->|reads_writes| n1
+  n0 -->|reads_writes| n2
+  n0 -->|calls| n3
+  n0 -->|calls| n4
+  n0 -->|calls| n5
+  classDef bad fill:#fae3e3,stroke:#b21b1b,color:#3a1010;
+  class n0,n1,n2,n3,n4,n5 bad;
+```
+
+The HTML report says the same thing without a mermaid renderer — three inline SVGs
+(diagram, category bars, checklist) with no script and no external reference, so it
+still renders from a CI artifact store with JavaScript disabled.
+
+```bash
+vibeguard graph .                              # mermaid on stdout
+vibeguard graph . --format svg --out arch.svg  # standalone SVG file
+```
+
+An unmeasured node is always drawn neutral — it must never look like a healthy one.
 
 ## Commands
 
@@ -90,93 +187,34 @@ generated repro test as its evidence. See
 | `vibeguard fix PATH` | Repair on a dedicated branch, one validated commit per fix. |
 | `vibeguard report PATH` | Re-render the last recorded scan — no rescan, no repository access. |
 | `vibeguard ci PATH` | Audit plus a severity gate. Exit 1 when the gate fails. |
-| `vibeguard graph PATH` | Draw the inferred architecture as mermaid or SVG. Discovery only — no rules. |
+| `vibeguard graph PATH` | Draw the inferred architecture as mermaid or SVG. Discovery only. |
 | `vibeguard baseline create\|show PATH` | Accept today's findings so CI gates only on new ones. |
 | `vibeguard doctor` | What is available here: python, git, tree-sitter, each adapter. |
 | `vibeguard rules` | Every registered rule with its category, scale, and autofix class. |
 
 Common flags: `--output table,json,jsonl,md,html,all` · `--local-only` · `--packs` ·
-`--deep` (audit: every checklist topic) · `--safe` / `--interactive` /
-`--deep-validate` / `--allow-no-git` (fix) · `--fail-on` / `--baseline` (ci) ·
-`--format mermaid|svg` / `--out` (graph).
+`--deep` (audit) · `--safe` / `--interactive` / `--deep-validate` / `--allow-no-git`
+(fix) · `--fail-on` / `--baseline` (ci) · `--format mermaid|svg` / `--out` (graph).
 
 Exit codes: `0` ok · `1` findings at or above the threshold · `2` execution error ·
 `3` refused, dirty git worktree.
 
-### Visualising your architecture
-
-Every markdown report opens with an **Architecture** section: the graph discovery
-inferred — the app, its datastores, its brokers, the third-party hosts it calls — as a
-mermaid `flowchart LR`, which GitHub and GitLab render inline. Nodes are coloured by
-the category score that governs them (database nodes by the `database` score, external
-services by `api`, the app itself by the overall score): green at 85 and above, amber
-from 60, red below, grey when nothing measured it.
-
-```mermaid
-flowchart LR
-  subgraph g1["app / services"]
-    n0["notes-api"]
-  end
-  subgraph g2["data #38; infrastructure"]
-    n1[("postgres")]
-    n2[("redis")]
-  end
-  subgraph g3["external"]
-    n3(["api.stripe.com"])
-  end
-  n0 -->|reads_writes| n1
-  n0 -->|caches| n2
-  n0 -->|calls| n3
-  classDef bad fill:#fae3e3,stroke:#b21b1b,color:#3a1010;
-  class n0,n1 bad;
-```
-
-The HTML report says the same thing without needing a mermaid renderer: an
-**Architecture & health at a glance** section of three inline SVGs — the diagram, the
-category scores as bars, and the checklist as one stacked bar per section. They are
-plain SVG with no script and no external reference, so the report still renders from a
-CI artifact store with JavaScript disabled.
-
-`vibeguard graph PATH` prints just the diagram, running discovery alone:
-
-```bash
-vibeguard graph .                              # mermaid on stdout
-vibeguard graph . --format svg --out arch.svg  # standalone SVG file
-```
-
-It reuses the scores from `.vibeguard/history/` when a scan is recorded there, and
-draws everything neutral when there is none — an unmeasured node must never look like
-a healthy one.
-
-## Modes
-
-| Mode | Writes? | Applies | Asks | Typical use |
-|---|---|---|---|---|
-| `audit` | never | nothing | nothing | first look, dashboards |
-| `fix --safe` | branch + commits | only `SAFE_AUTOFIX` | nothing | the default; unattended |
-| `fix --interactive` | branch + commits | `SAFE_AUTOFIX` + approved `REVIEW_RECOMMENDED` | one unified diff at a time | a real hardening session |
-| `ci` | report files | nothing | nothing | pull requests, pre-commit |
-
-`MANUAL_CHANGE_REQUIRED` findings are never applied in any mode, and neither is
-anything touching schemas, migrations, authentication, backups, or infrastructure
-state — regardless of which flags you pass. Those get `REQUIRES_REVIEW` with
-instructions.
-
 ## The pipeline
 
-**Detect.** Discovery first: languages, frameworks, databases, ORMs, containers,
-CI, and a scale class (`toy | small | medium | large`) from LOC, service count, and
-data-sensitivity signals. Every rule declares the minimum scale it applies to, and
-rules that do not apply report nothing. Then ~117 built-in rules run, plus any
-external scanner that happens to be installed, deduplicated by fingerprint.
+**Detect.** Discovery first — languages, frameworks, databases, ORMs, containers, CI,
+and a scale class (`toy | small | medium | large`). Every rule declares the minimum
+scale it applies to, and rules that do not apply report nothing. Then 117 built-in
+rules across 16 packs run, plus any of the 8 external adapters that happen to be
+installed (bandit, detect-secrets, pip-audit, checkov, semgrep, hadolint, trivy,
+npm-audit), deduplicated by fingerprint.
 
-**Explain.** Every finding carries what is wrong *here*, why it matters in
-consequences rather than jargon, a recommended follow-up, and references.
+**Explain.** Every finding carries what is wrong *here*, why it matters in consequences
+rather than jargon, a recommended follow-up, and references.
 
-**Repair.** Git preflight (a dirty worktree is refused), a dedicated branch, and then
-one finding at a time: the rule computes a deterministic whole-file patch and hands
-back the sha256 of the content it read; the engine re-checks that sha immediately
-before writing, so a file that changed underneath aborts its own fix.
+**Repair.** Git preflight, a dedicated branch, then one finding at a time: the rule
+computes a deterministic whole-file patch and hands back the sha256 of the content it
+read; the engine re-checks that sha immediately before writing, so a file that changed
+underneath aborts its own fix.
 
 **Test.** For a curated subset of rules VibeGuard *generates a pytest repro test*
 before touching anything, runs it, and insists it fails. A test that passes on
@@ -184,9 +222,9 @@ unrepaired code reproduces nothing and is thrown away rather than used as eviden
 
 **Validate.** The applicable rungs of syntax → typecheck → lint → targeted tests →
 full suite → build → container build → startup. Anything that already failed on the
-untouched repository is *excluded* from the verdict and the exclusion is printed —
-a project whose suite was already red cannot blame our patch, and cannot borrow a
-green verdict either.
+untouched repository is *excluded* from the verdict, and the exclusion is printed — a
+project whose suite was already red cannot blame our patch, and cannot borrow a green
+verdict either.
 
 **Report.** `vibeguard-report.json` (canonical), `.md`, and a self-contained `.html`
 with no external requests of any kind.
@@ -196,8 +234,8 @@ with no external requests of any kind.
 `topics.yaml` holds **279 audit topics across 18 sections** — the completeness
 guarantee. Every report accounts for every one of them, and the engine hard-fails its
 own run if a topic goes missing. A topic is `pass`, `fail`, `fixed`, `not_applicable`
-(with the reason), or `review_required` — and `review_required` is where topics with
-no automated detector land. They are never quietly converted to `pass`.
+(with the reason), or `review_required` — and `review_required` is where topics with no
+automated detector land. They are never quietly converted to `pass`.
 
 ## Safety model
 
@@ -207,20 +245,19 @@ no automated detector land. They are never quietly converted to `pass`.
   repository, `fix` is audit-only unless you pass `--allow-no-git` (then it writes a
   `.orig` backup per file).
 * **`FIXED` is a claim about evidence.** It requires: the patch applied, no validator
-  failed, at least one validator actually ran and passed, and — if a repro test
-  existed — that it now passes. Anything less is downgraded to `UNVERIFIED`,
-  `REQUIRES_REVIEW`, `FAILED`, or `NOT_ATTEMPTED`, and the report says which.
+  failed, at least one validator actually ran and passed, and — if a repro test existed
+  — that it now passes. Anything less is downgraded to `UNVERIFIED`, `REQUIRES_REVIEW`,
+  `FAILED`, or `NOT_ATTEMPTED`, and the report says which.
 * **Destructive domains are refused in every mode.** Schema, migration, auth, backup,
-  and infrastructure changes are reported, never applied.
-* **Secrets are redacted at the Finding-creation boundary**, so no renderer can leak
-  one.
-* **Privacy.** The default AI provider is `null` and the whole pipeline works without
-  a model. `--local-only` refuses any provider that is not on this machine, and skips
+  and infrastructure changes are reported, never applied — regardless of flags.
+* **Secrets are redacted at the Finding-creation boundary**, so no renderer can leak one.
+* **Privacy.** The default AI provider is `null` and the whole pipeline works without a
+  model. `--local-only` refuses any provider that is not on this machine and skips
   scanners that contact a remote service. Any prompt that would leave the machine is
   announced first — an `ai.external_send` event and a printed notice, *before* the
-  request. See [docs/PLUGINS.md](docs/PLUGINS.md).
+  request.
 
-## Memory: baselines, suppressions, regression
+## Baselines, suppressions, regression
 
 Fingerprints are `sha256(rule_id | path | normalised snippet)` — independent of line
 numbers, so they survive reformatting and unrelated edits.
@@ -232,7 +269,24 @@ numbers, so they survive reformatting and unrelated edits.
   date, are excluded from scoring, and are listed in every report. An expired one is
   ignored *and* its lapse is reported.
 * **Regression diff** — `N new / N resolved / N regressed / N unchanged` against
-  `.vibeguard/history/`, where *regressed* specifically means "fixed, then came back".
+  `.vibeguard/history/`, where *regressed* means "fixed, then came back".
+
+## CI
+
+A composite GitHub Action ships in [`action.yml`](action.yml):
+
+```yaml
+- uses: Gypsy46n2/VibeGuard@v0.2.0
+  with:
+    path: .
+    fail-on: high        # critical | high | medium | low | info
+    local-only: "true"   # nothing leaves the runner
+    baseline: "true"     # gate only on new findings
+```
+
+It installs VibeGuard, runs `vibeguard ci`, uploads `vibeguard-report.{json,md,html}`
+as a workflow artifact, and fails the job only when the gate does. Pre-commit hooks
+(`vibeguard-ci`, `vibeguard-audit`) are in [`.pre-commit-hooks.yaml`](.pre-commit-hooks.yaml).
 
 ## About the score
 
@@ -256,28 +310,45 @@ print(report.overall_before, len(report.findings))
 
 `--output jsonl` streams the same events as one JSON object per line, and
 [`plugin.json`](plugin.json) documents every event name and payload for agent hosts.
-Third-party rule packs register under the `vibeguard.rules` entry point.
 
 ## Documentation
 
-- [docs/INSTALL.md](docs/INSTALL.md) — install matrix, optional scanners, `doctor`
-- [docs/RULES.md](docs/RULES.md) — writing a rule, and writing a `fix()` for it
-- [docs/PLUGINS.md](docs/PLUGINS.md) — rule packs, adapters, AI providers, embedding
-- [docs/SCORING.md](docs/SCORING.md) — the exact formula
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design and roadmap
-- [docs/INTERFACES.md](docs/INTERFACES.md) — binding contracts (normative)
-- [docs/DECISIONS.md](docs/DECISIONS.md) — every contract interpretation, and why
+| Document | Contents |
+|---|---|
+| [docs/INSTALL.md](docs/INSTALL.md) | Install matrix, optional scanners, `doctor` |
+| [docs/RULES.md](docs/RULES.md) | Writing a rule, and writing a `fix()` for it |
+| [docs/PLUGINS.md](docs/PLUGINS.md) | Rule packs, adapters, AI providers, embedding |
+| [docs/SCORING.md](docs/SCORING.md) | The exact formula |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design and roadmap |
+| [docs/INTERFACES.md](docs/INTERFACES.md) | Binding contracts (normative) |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Every contract interpretation, and why |
+
+## Contributing
+
+New rules are the most useful contribution. [docs/RULES.md](docs/RULES.md) walks
+through a rule end to end — `detect()`, the topics it answers, and the bar a `fix()`
+has to clear before it may claim `SAFE_AUTOFIX`. Distributing rules separately is
+covered in [docs/PLUGINS.md](docs/PLUGINS.md): third-party packs register under the
+`vibeguard.rules` entry point and need no changes here.
+
+```bash
+git clone https://github.com/Gypsy46n2/VibeGuard.git && cd VibeGuard
+pip install -e ".[dev]"
+pytest && ruff check .
+```
+
+[`examples/vulnerable-app/`](examples/vulnerable-app/) is the fixture the integration
+tests assert against — deliberately broken, and excluded from linting. Do not "fix" it.
 
 ## Status
 
-**0.2.0 — MVP complete.** 117 rules across 16 packs (20 registered; 4 language packs are reserved and empty), 8 external adapters, the 279-topic
-master checklist, fix mode with git safety and a validation ladder, repro-test
-generation, md/html/json reporting, baselines/suppressions/history/regression, the AI
-provider layer, a GitHub Action, a Docker image, and pre-commit hooks.
+**0.2.0 — MVP complete.** 117 rules across 16 packs (20 are registered; 4 language
+packs are reserved and empty), 8 external adapters, the 279-topic master checklist,
+and 1090 tests.
 
 Post-MVP: more language packs, deeper k8s/IaC coverage, LLM-assisted cross-file
 analysis, PR-comment integration, a web dashboard.
 
 ## License
 
-Apache-2.0.
+[Apache-2.0](LICENSE) © 2026 VibeGuard contributors.
