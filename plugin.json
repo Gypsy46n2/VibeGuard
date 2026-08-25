@@ -1,0 +1,89 @@
+{
+  "$comment": "Agent-plugin manifest — ARCHITECTURE.md §10.3. A host that can run a subprocess and read JSON lines can drive VibeGuard from this file alone.",
+  "name": "vibeguard",
+  "version": "0.2.0",
+  "description": "Audit, repair, and harden vibe-coded applications toward production grade.",
+  "homepage": "https://github.com/vibeguard/vibeguard",
+  "license": "Apache-2.0",
+  "schema_version": "1",
+  "entry": {
+    "command": "vibeguard",
+    "install": "pip install vibeguard",
+    "docker": "ghcr.io/vibeguard/vibeguard:0.2.0",
+    "stream_flag": "--output jsonl",
+    "commands": [
+      {
+        "name": "audit",
+        "argv": ["vibeguard", "audit", "{path}", "--output", "jsonl"],
+        "description": "Read-only scan. Never writes to the target repository.",
+        "writes": false
+      },
+      {
+        "name": "fix",
+        "argv": ["vibeguard", "fix", "{path}", "--safe", "--output", "jsonl"],
+        "description": "Apply only SAFE_AUTOFIX repairs, each validated and committed on a dedicated branch.",
+        "writes": true
+      },
+      {
+        "name": "ci",
+        "argv": ["vibeguard", "ci", "{path}", "--fail-on", "{severity}", "--output", "jsonl"],
+        "description": "Audit plus a severity gate. Exit 1 when the gate fails.",
+        "writes": false
+      },
+      {
+        "name": "report",
+        "argv": ["vibeguard", "report", "{path}", "--output", "html"],
+        "description": "Re-render the last recorded scan without rescanning.",
+        "writes": true
+      }
+    ]
+  },
+  "exit_codes": {
+    "0": "ok, or below the CI threshold",
+    "1": "findings at or above the fail-on threshold (ci mode)",
+    "2": "execution error",
+    "3": "refused: dirty git worktree"
+  },
+  "artifacts": {
+    "vibeguard-report.json": "Canonical report, schema in docs/INTERFACES.md §8. Always written.",
+    "vibeguard-report.md": "Human-readable report.",
+    "vibeguard-report.html": "Self-contained dashboard — no external requests of any kind.",
+    ".vibeguard/history/": "One stored report per run; the input to the regression diff.",
+    ".vibeguard/repro/": "Generated pytest repro tests, one per repro-verified repair."
+  },
+  "events": {
+    "$comment": "One JSON object per line on stdout under --output jsonl: {\"event\": name, \"ts\": iso8601, \"data\": {...}}. The first ten names are normative (docs/INTERFACES.md §6); the rest are additive extensions.",
+    "envelope": {
+      "event": "string",
+      "ts": "iso8601",
+      "data": "object"
+    },
+    "names": {
+      "scan.started": ["repo", "mode"],
+      "scan.stage": ["stage"],
+      "scan.issue_found": ["finding"],
+      "scan.completed": ["repo", "mode", "findings", "counts", "overall"],
+      "repair.started": ["finding", "rule_id", "files", "summary"],
+      "repair.completed": ["finding", "rule_id", "status", "commit"],
+      "repair.failed": ["finding", "rule_id", "status", "detail"],
+      "validation.started": ["finding", "rule_id", "files"],
+      "validation.completed": ["finding", "rule_id", "status", "steps"],
+      "report.generated": ["path", "format", "paths"],
+      "ai.external_send": ["provider", "endpoint", "model", "characters"],
+      "ai.blocked": ["provider", "reason", "local_only"],
+      "repro.generated": ["finding", "rule_id", "path", "describes"],
+      "repro.result": ["finding", "rule_id", "path", "phase", "passed", "detail"]
+    }
+  },
+  "privacy": {
+    "default_provider": "null",
+    "network_by_default": false,
+    "local_only_flag": "--local-only",
+    "notes": "Built-in rules need no network and no model. `--local-only` refuses any AI provider that is not on this machine and skips adapters that contact a remote service; a non-local send is always announced as ai.external_send before it happens."
+  },
+  "library": {
+    "import": "from vibeguard import Engine",
+    "usage": "Engine(config).audit(path) -> ScanReport; .fix(path, mode); .ci(path) -> (ScanReport, exit_code)",
+    "events": "Engine(config, events=EventBus()) — subscribe(pattern, fn)"
+  }
+}

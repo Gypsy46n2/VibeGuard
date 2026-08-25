@@ -1,0 +1,36 @@
+# Hooks this repository provides to other projects:
+#
+#   repos:
+#     - repo: https://github.com/vibeguard/vibeguard
+#       rev: v0.2.0
+#       hooks:
+#         - id: vibeguard-ci
+#
+# Both hooks run once per commit over the whole repository rather than once per
+# changed file: VibeGuard's rules are cross-file by nature ("is a backup configured
+# anywhere?", "does any entrypoint apply security headers?"), so a file-scoped
+# invocation would answer them wrongly. `pass_filenames: false` and `always_run` are
+# what make that so.
+
+- id: vibeguard-ci
+  name: vibeguard ci
+  description: >-
+    Fail the commit when VibeGuard finds an issue at or above the configured
+    severity. Local-only: nothing leaves the machine.
+  entry: vibeguard ci . --fail-on high --local-only --output table
+  language: python
+  pass_filenames: false
+  always_run: true
+  require_serial: true
+
+- id: vibeguard-audit
+  name: vibeguard audit
+  description: >-
+    Report VibeGuard findings without failing the commit — the informational
+    counterpart to vibeguard-ci, for adopting the tool gradually.
+  entry: vibeguard audit . --local-only --output table
+  language: python
+  pass_filenames: false
+  always_run: true
+  require_serial: true
+  verbose: true

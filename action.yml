@@ -1,0 +1,123 @@
+name: VibeGuard
+description: >-
+  Audit a vibe-coded application and fail the build when findings reach a severity
+  threshold. Uploads the full report as a workflow artifact.
+author: VibeGuard contributors
+
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  path:
+    description: Directory to scan, relative to the workspace.
+    required: false
+    default: "."
+  fail-on:
+    description: >-
+      Minimum severity that fails the job: critical, high, medium, low, or info.
+    required: false
+    default: high
+  local-only:
+    description: >-
+      Never send code off the runner: refuses any non-local AI provider and skips
+      scanners that contact a remote service.
+    required: false
+    default: "false"
+  baseline:
+    description: >-
+      Honour .vibeguard/baseline.json, exempting known findings from the gate.
+      Set to false to gate on everything.
+    required: false
+    default: "true"
+  python-version:
+    description: Python version used to run VibeGuard.
+    required: false
+    default: "3.12"
+  vibeguard-version:
+    description: >-
+      Version specifier installed from PyPI, e.g. "==0.2.0". Empty installs the
+      action's own checkout when it is this repository, or the latest release.
+    required: false
+    default: ""
+  upload-report:
+    description: Upload vibeguard-report.{json,md,html} as a workflow artifact.
+    required: false
+    default: "true"
+  artifact-name:
+    description: Name of the uploaded artifact.
+    required: false
+    default: vibeguard-report
+
+outputs:
+  exit-code:
+    description: "0 below the threshold, 1 at or above it."
+    value: ${{ steps.scan.outputs.exit-code }}
+  report-json:
+    description: Path to the canonical JSON report.
+    value: ${{ steps.scan.outputs.report-json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install VibeGuard
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+        if [ -n "${{ inputs.vibeguard-version }}" ]; then
+          python -m pip install "vibeguard${{ inputs.vibeguard-version }}"
+        elif [ -f "${{ github.action_path }}/pyproject.toml" ]; then
+          python -m pip install "${{ github.action_path }}"
+        else
+          python -m pip install vibeguard
+        fi
+        vibeguard --version
+
+    - name: Run vibeguard ci
+      id: scan
+      shell: bash
+      # Never `set -e` around the scan itself: exit 1 is a *result* (the gate
+      # failed), not a crash, and the report must still be uploaded.
+      run: |
+        set -uo pipefail
+        args=("${{ inputs.path }}" "--fail-on" "${{ inputs.fail-on }}"
+              "--output" "table,md,html")
+        if [ "${{ inputs.local-only }}" = "true" ]; then args+=("--local-only"); fi
+        if [ "${{ inputs.baseline }}" = "true" ]; then
+          args+=("--baseline")
+        else
+          args+=("--no-baseline")
+        fi
+        vibeguard ci "${args[@]}"
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report-json=${{ inputs.path }}/vibeguard-report.json" >> "$GITHUB_OUTPUT"
+        exit 0
+      env:
+        # Local-only by default in CI: nothing about a build should quietly ship
+        # the repository to a third party.
+        VIBEGUARD_CI: "1"
+
+    - name: Upload report
+      if: ${{ inputs.upload-report == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        if-no-files-found: warn
+        path: |
+          ${{ inputs.path }}/vibeguard-report.json
+          ${{ inputs.path }}/vibeguard-report.md
+          ${{ inputs.path }}/vibeguard-report.html
+
+    - name: Fail the job when the gate failed
+      if: ${{ steps.scan.outputs.exit-code != '0' }}
+      shell: bash
+      run: |
+        echo "::error title=VibeGuard::findings at or above '${{ inputs.fail-on }}' — see the ${{ inputs.artifact-name }} artifact"
+        exit 1
