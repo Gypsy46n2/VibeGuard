@@ -38,6 +38,37 @@ __all__ = [
 _MAX = 6
 
 
+#: Commands that start a long-running server. A HEALTHCHECK asks "is the service
+#: working?"; a one-shot CLI image has no service for the probe to ask about, and the
+#: runtime never runs the probe on a container that exits anyway.
+_SERVER_COMMAND = re.compile(
+    r"\b(gunicorn|uvicorn|hypercorn|daphne|waitress|granian|nginx|httpd|apache2|"
+    r"caddy|envoy|traefik|node|npm|yarn|pnpm|next|nest|serve|http-server|puma|"
+    r"unicorn|rails|celery|sidekiq|supervisord|tini)\b|"
+    r"\b(?:runserver|manage\.py\s+runserver|flask\s+run|app\.py|server\.py|"
+    r"main\.py|server\.js|index\.js|app\.js)\b|"
+    r"\bstart\b",
+    re.IGNORECASE,
+)
+
+
+def _is_service_image(final_stage: list[Instruction]) -> bool:
+    """True when the final stage builds a long-running service rather than a CLI.
+
+    Evidence is an ``EXPOSE`` (the image publishes a port, so something listens on it)
+    or a CMD/ENTRYPOINT that names a server runner. Without either, the image is a
+    one-shot tool — VibeGuard's own image is ``ENTRYPOINT ["vibeguard"]`` — and
+    demanding a HEALTHCHECK of it is advice with no failure mode behind it
+    (DECISIONS.md D68).
+    """
+    if any(ins.upper == "EXPOSE" for ins in final_stage):
+        return True
+    for ins in final_stage:
+        if ins.upper in {"CMD", "ENTRYPOINT"} and _SERVER_COMMAND.search(ins.value):
+            return True
+    return False
+
+
 class DockerfileNoHealthcheckRule(Rule):
     """A runnable image that never tells the runtime whether it is healthy."""
 
@@ -78,6 +109,8 @@ class DockerfileNoHealthcheckRule(Rule):
             last = found[-1]
             # A stage with no entrypoint is a builder; it does not need a healthcheck.
             if not any(ins.upper in {"CMD", "ENTRYPOINT"} for ins in last):
+                continue
+            if not _is_service_image(last):
                 continue
             if any(ins.upper == "HEALTHCHECK" for ins in instructions):
                 continue

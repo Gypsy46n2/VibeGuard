@@ -1,9 +1,12 @@
 """Shared helpers for built-in rule packs.
 
-Three things live here:
+Four things live here:
 
 * **Path filters** — test files, fixtures, vendored trees and migrations are skipped
   by default so regex rules do not drown the report in false positives.
+* **String/comment awareness** — :func:`is_non_code_line` and :func:`non_code_lines`
+  (implemented in ``_literals``) let any text rule ask whether a match landed inside
+  a docstring, comment, or prose string literal rather than in executing code.
 * **Base classes** — :class:`RegexRule` (regex with context, comment-aware) and
   :class:`ProjectRule` (one project-level finding) carry the boilerplate.
 * **tree-sitter helpers** — defensive wrappers around the cached parse in
@@ -14,6 +17,7 @@ Three things live here:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -23,6 +27,12 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from vibeguard.core.fingerprint import PROJECT_PATH
 from vibeguard.core.models import Evidence, Finding
 from vibeguard.core.rule import Rule
+from vibeguard.rules._literals import (
+    is_non_code_line,
+    is_non_code_span,
+    non_code_lines,
+    non_code_lines_of_text,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
@@ -39,15 +49,21 @@ __all__ = [
     "enclosing_function",
     "in_loop",
     "is_generated_path",
+    "is_non_code_line",
+    "is_non_code_span",
     "is_test_path",
     "js_calls",
     "line_at",
     "node_text",
+    "non_code_lines",
+    "non_code_lines_of_text",
     "py_calls",
     "source_files",
     "strip_quotes",
     "walk",
 ]
+
+log = logging.getLogger(__name__)
 
 PY_SUFFIXES: tuple[str, ...] = (".py",)
 JS_SUFFIXES: tuple[str, ...] = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
@@ -179,6 +195,13 @@ class RegexRule(Rule):
     skip_tests: ClassVar[bool] = True
     skip_generated: ClassVar[bool] = True
     skip_comments: ClassVar[bool] = True
+    #: Drop matches on lines that are pure string or comment content (docstrings,
+    #: wrapped prose strings, block comments). Opt-in per rule, and deliberately so:
+    #: a rule whose whole subject *is* a string value — a hardcoded secret, a
+    #: connection string, a CORS header assigned as a literal — must keep matching
+    #: them. Those all live on lines that carry executable tokens too, so enabling
+    #: this only ever removes prose. See ``rules/_literals``.
+    skip_non_code: ClassVar[bool] = False
     #: Cap per file so one pathological file cannot flood the report.
     max_per_file: ClassVar[int] = 10
     #: Cap across the repository.
@@ -218,6 +241,8 @@ class RegexRule(Rule):
                 if self.skip_comments and _is_comment(line, suffix):
                     continue
                 if not any(pattern.search(line) for pattern in self.patterns):
+                    continue
+                if self.skip_non_code and is_non_code_line(ctx, rel, index + 1):
                     continue
                 if self.negative is not None:
                     lo = max(0, index - self.context_lines)
@@ -296,7 +321,10 @@ def walk(node: Any) -> Iterator[Any]:
         yield current
         try:
             stack.extend(reversed(current.children))
-        except Exception:  # pragma: no cover - defensive against binding quirks
+        except (AttributeError, TypeError):  # pragma: no cover - binding quirk
+            # A node whose children the installed binding will not expose is skipped.
+            # Narrow rather than broad, and silent rather than logged: this is the
+            # innermost loop of every AST rule.
             continue
 
 
@@ -374,7 +402,8 @@ def _calls(ctx: ScanContext, relpath: str, call_types: set[str]) -> list[CallSit
                     file=relpath,
                 )
             )
-        except Exception:  # pragma: no cover - defensive
+        except (AttributeError, TypeError, ValueError):  # pragma: no cover - defensive
+            # Per-node boundary: narrow, and silent for the same reason as `walk`.
             continue
     return out
 

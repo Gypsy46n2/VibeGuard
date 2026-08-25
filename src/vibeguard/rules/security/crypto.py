@@ -29,6 +29,7 @@ from vibeguard.rules._support import (
     PY_SUFFIXES,
     CallSite,
     ancestors,
+    is_non_code_line,
     js_calls,
     node_text,
     py_calls,
@@ -136,6 +137,8 @@ class WeakCryptographyRule(Rule):
                 if stripped.startswith(("#", "//", "*")):
                     continue
                 if not _WEAK_IV.search(line):
+                    continue
+                if is_non_code_line(ctx, rel, index + 1):
                     continue
                 out.append(self._finding(rel, index + 1, "predictable IV/nonce", stripped, True))
         return out

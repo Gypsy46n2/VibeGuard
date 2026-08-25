@@ -16,7 +16,7 @@ from vibeguard.core.models import (
 )
 from vibeguard.core.rule import Rule
 from vibeguard.rules._support import JS_SUFFIXES, PY_SUFFIXES, source_files
-from vibeguard.rules.scaling._signals import grep_repo, is_web_app
+from vibeguard.rules.scaling._signals import grep_repo, is_request_path, is_web_app
 
 if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
@@ -114,6 +114,8 @@ class InProcessStateRule(Rule):
         for rel in source_files(ctx, PY_SUFFIXES + JS_SUFFIXES):
             if len(findings) >= _MAX_FINDINGS:
                 break
+            if not is_request_path(ctx, rel):
+                continue
             text = ctx.read(rel)
             if not text or len(text) > 400_000:
                 continue

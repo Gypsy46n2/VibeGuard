@@ -29,6 +29,7 @@ from vibeguard.rules._support import (
     JS_SUFFIXES,
     PY_SUFFIXES,
     CallSite,
+    is_non_code_line,
     js_calls,
     node_text,
     py_calls,
@@ -165,6 +166,8 @@ class InsecureSessionCookieRule(Rule):
                 if len(out) >= budget:
                     break
                 if line.strip().startswith("#") or not _SETTINGS_OFF.search(line):
+                    continue
+                if is_non_code_line(ctx, rel, index + 1):
                     continue
                 out.append(
                     self.make_finding(

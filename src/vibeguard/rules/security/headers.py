@@ -18,7 +18,7 @@ from vibeguard.core.models import (
 )
 from vibeguard.core.rule import Rule
 from vibeguard.rules._fixes import insert_lines, whole_file_patch
-from vibeguard.rules._support import ProjectRule, source_files
+from vibeguard.rules._support import ProjectRule, is_non_code_line, source_files
 from vibeguard.rules.security._taint import config_files
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -252,6 +252,9 @@ class PermissiveCorsRule(Rule):
                 if stripped.startswith(("#", "//", "*")):
                     continue
                 if not any(pattern.search(line) for pattern in _CORS_PATTERNS):
+                    continue
+                # Prose that names a CORS pattern is documentation, not configuration.
+                if is_non_code_line(ctx, rel, index + 1):
                     continue
                 window = "\n".join(lines[max(0, index - 4) : index + 5])
                 credentials = bool(_CREDENTIALS.search(window))

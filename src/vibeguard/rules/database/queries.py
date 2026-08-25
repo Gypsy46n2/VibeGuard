@@ -72,7 +72,10 @@ _ORM_RECEIVER = re.compile(
     r"collection|prisma|knex|orm|conn|connection|cursor|client|table)\b",
     re.IGNORECASE,
 )
-_MODEL_RECEIVER = re.compile(r"(^|\.)[A-Z][A-Za-z0-9_]*$")
+#: A CapWords receiver is an ORM model class (``User.get(...)``). An ALL-CAPS one
+#: is a module constant — ``SOURCE_EXTENSIONS.get(ext)`` is a dict lookup, not a
+#: database round-trip — so at least one lowercase letter is required.
+_MODEL_RECEIVER = re.compile(r"(^|\.)[A-Z][A-Za-z0-9_]*[a-z][A-Za-z0-9_]*$")
 
 
 def _is_query_call(site: CallSite) -> bool:

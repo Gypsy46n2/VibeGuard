@@ -15,6 +15,7 @@ from vibeguard.core.models import (
 )
 from vibeguard.core.rule import Rule
 from vibeguard.rules._support import JS_SUFFIXES, PY_SUFFIXES, RegexRule
+from vibeguard.rules.scaling._signals import is_request_path, is_web_app
 
 if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
@@ -67,6 +68,7 @@ class InProcessCacheRule(RegexRule):
     suffixes: ClassVar[tuple[str, ...]] = PY_SUFFIXES + JS_SUFFIXES
     max_per_file: ClassVar[int] = 2
     max_total: ClassVar[int] = 5
+    skip_non_code: ClassVar[bool] = True
     recommended_followup: ClassVar[str] = (
         "Put the cached value in Redis with an explicit TTL and an invalidation path "
         "(delete the key when the underlying row changes), and keep any in-process cache "
@@ -75,9 +77,15 @@ class InProcessCacheRule(RegexRule):
 
     # M3 fix(): none — introducing Redis is an infrastructure change, not a code patch.
     def detect(self, ctx: ScanContext) -> list[Finding]:
+        # "Every instance keeps its own copy" is only a problem when there *are*
+        # instances. A CLI or a library memoising a lookup table is not running
+        # behind a load balancer, and telling it to adopt Redis is the kind of
+        # disproportionate advice VibeGuard exists to avoid (DECISIONS.md D66).
+        if not is_web_app(ctx):
+            return []
         if _SHARED_CACHE_TECH & ctx.tech.all_technologies():
             return []
-        return super().detect(ctx)
+        return [f for f in super().detect(ctx) if is_request_path(ctx, f.file or "")]
 
     def describe(self, ctx: ScanContext, relpath: str, line_no: int, line: str) -> str:
         return (

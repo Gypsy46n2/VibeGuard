@@ -71,13 +71,24 @@ class DuplicateDependencyRule(Rule):
                 continue
             specs = {req.spec.strip() for req in reqs}
             same_file = len({req.file for req in reqs}) == 1
-            if len(specs) == 1 and not same_file:
+            same_section = len({req.section for req in reqs}) == 1
+            if len(specs) == 1 and not (same_file and same_section):
+                # One constraint, restated. Two optional groups that both need
+                # `fastapi>=0.110` — a `ui` extra and the `dev` extra that tests it —
+                # is normal packaging, and the resolver has nothing to choose between
+                # (DECISIONS.md D67). Only a genuine repeat *within* one section, or
+                # actually differing constraints, is a resolution hazard.
                 continue
             where = "; ".join(
                 f"{req.file}:{req.line} [{req.section}] {req.spec or '<no constraint>'}"
                 for req in reqs[:4]
             )
-            scope = "twice in the same manifest" if same_file else "with different constraints"
+            if same_file and same_section:
+                scope = "twice in the same section of one manifest"
+            elif same_file:
+                scope = "twice in the same manifest with different constraints"
+            else:
+                scope = "with different constraints"
             first = reqs[0]
             findings.append(
                 self.make_finding(

@@ -78,8 +78,20 @@ class ScanContext(BaseModel):
     #: back to a deterministic answer.
     ai: AIGateway | None = None
 
+    #: Files that define what this project *is* — everything except test, fixture,
+    #: example, sample, demo, and vendored material (``discovery.paths``). Discovery
+    #: profiles the stack and the scale from these alone; rules still scan
+    #: :attr:`files` in full, because a real defect in ``tests/`` is still a defect.
+    #: Empty means "not computed" and callers should treat every file as primary.
+    primary_files: list[str] = Field(default_factory=list)
+
     _read_cache: dict[str, str] = PrivateAttr(default_factory=dict)
     _ast_cache: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _non_code_cache: dict[str, Any] = PrivateAttr(default_factory=dict)
+    #: Per-run memo space for rule helpers that derive something from the whole repo
+    #: (which directories hold the web app, say) and must not redo it per file.
+    _scratch: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _fixture_set: set[str] | None = PrivateAttr(default=None)
 
     # ------------------------------------------------------------------ files
     def read(self, relpath: str) -> str:
@@ -122,6 +134,20 @@ class ScanContext(BaseModel):
     def exists(self, relpath: str) -> bool:
         """True when the path exists on disk under the repo root."""
         return (self.root / relpath).exists()
+
+    def is_fixture(self, relpath: str) -> bool:
+        """True when ``relpath`` is test, fixture, example, or vendored material.
+
+        Rules use this to decide whether a file may *speak for the project* — which
+        manifest declares its dependencies, which Dockerfile is its image. It is never
+        a reason to skip scanning a file.
+        """
+        if self._fixture_set is None:
+            if self.primary_files:
+                self._fixture_set = set(self.files) - set(self.primary_files)
+            else:
+                self._fixture_set = set()
+        return str(relpath) in self._fixture_set
 
     def files_matching(self, *suffixes: str) -> list[str]:
         """Scanned files whose suffix matches any of ``suffixes`` (case-insensitive)."""

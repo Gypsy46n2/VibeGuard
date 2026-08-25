@@ -16,7 +16,7 @@ from vibeguard.core.models import (
     Severity,
 )
 from vibeguard.core.rule import Rule
-from vibeguard.rules._support import is_generated_path
+from vibeguard.rules._support import is_generated_path, is_test_path
 from vibeguard.rules.secrets._common import is_dotenv, is_env_template
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -27,7 +27,42 @@ __all__ = ["EnvFileCommittedRule", "PrivateKeyCommittedRule"]
 _KEY_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "server.key", "client.key"}
 _KEY_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".ppk")
 _KEY_HEADER = re.compile(r"-----BEGIN (?:[A-Z0-9 ]*)PRIVATE KEY-----")
+_KEY_FOOTER = re.compile(r"-----END |['\"`]")
+_BASE64_CHARS = re.compile(r"[A-Za-z0-9+/=]")
+_ESCAPES = re.compile(r"\\[nrt\"'\\]")
 _MAX_SNIFF_BYTES = 200_000
+#: Base64 characters that must follow the header before this counts as key material.
+#: A bare header is documentation ("the file starts with ``-----BEGIN PRIVATE KEY``").
+_MIN_BODY_CHARS = 20
+#: In a test, spec, or fixture file the bar is a *real* key. Redaction and
+#: secret-scanner unit tests are full of truncated stand-ins like
+#: ``"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAK\n-----END..."``; a real 2048-bit
+#: RSA key is well over a kilobyte of base64, so length separates them cleanly and
+#: without weakening detection anywhere else (DECISIONS.md D69).
+_MIN_TEST_BODY_CHARS = 400
+
+
+def _body_threshold(relpath: str) -> int:
+    """How much key material a file must hold before it counts."""
+    return _MIN_TEST_BODY_CHARS if is_test_path(relpath) else _MIN_BODY_CHARS
+
+
+def _has_key_material(text: str, *, minimum: int) -> bool:
+    """True when a PEM header is followed by at least ``minimum`` base64 characters.
+
+    Detection by *file name* (``id_rsa``, ``server.key``) is unchanged and stays
+    CRITICAL wherever it is found. This only governs the inline case, where the same
+    header appears in prose, in a rule's own pattern, and in the fixtures of every
+    secret scanner ever written. ``\\n`` escape sequences are stripped first, so a key
+    pasted into a one-line source string is measured the same as a real PEM file.
+    """
+    for match in _KEY_HEADER.finditer(text):
+        tail = text[match.end() : match.end() + 8000]
+        stop = _KEY_FOOTER.search(tail)
+        body = _ESCAPES.sub("\\n", tail[: stop.start()] if stop else tail)
+        if len(_BASE64_CHARS.findall(body)) >= minimum:
+            return True
+    return False
 
 
 class PrivateKeyCommittedRule(Rule):
@@ -78,8 +113,8 @@ class PrivateKeyCommittedRule(Rule):
                 text = ctx.read(rel)
                 if not text or len(text) > _MAX_SNIFF_BYTES:
                     continue
-                if _KEY_HEADER.search(text):
-                    reason = "file contains a PEM private-key header"
+                if _has_key_material(text, minimum=_body_threshold(rel)):
+                    reason = "file contains a PEM private-key block"
             if not reason:
                 continue
             findings.append(

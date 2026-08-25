@@ -82,6 +82,7 @@ class LocalUploadStorageRule(RegexRule):
     suffixes: ClassVar[tuple[str, ...]] = PY_SUFFIXES + JS_SUFFIXES
     max_per_file: ClassVar[int] = 2
     max_total: ClassVar[int] = 5
+    skip_non_code: ClassVar[bool] = True
     recommended_followup: ClassVar[str] = (
         "Write uploads to object storage instead of disk — `boto3.client(\"s3\")."
         "upload_fileobj(file, BUCKET, key)` on Python, `multer-s3` or a presigned PUT on "

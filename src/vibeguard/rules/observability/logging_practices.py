@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, ClassVar
@@ -32,6 +33,8 @@ from vibeguard.rules._support import (
     PY_SUFFIXES,
     ProjectRule,
     RegexRule,
+    is_non_code_line,
+    is_non_code_span,
     source_files,
 )
 from vibeguard.rules.observability._common import (
@@ -46,6 +49,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
 
 __all__ = ["DebugLogLevelRule", "NoLoggingFrameworkRule", "PrintDiagnosticsRule"]
+
+log = logging.getLogger(__name__)
 
 _PRINT_PY = re.compile(r"(?<![\w.])print\s*\(")
 _CONSOLE_JS = re.compile(r"(?<![\w.$])console\s*\.\s*(?:log|debug|info)\s*\(")
@@ -154,7 +159,15 @@ class PrintDiagnosticsRule(Rule):
                     continue
                 if guard_line is not None and index >= guard_line:
                     continue
-                if not pattern.search(line):
+                match = pattern.search(line)
+                if match is None:
+                    continue
+                # A docstring or prose string that *names* print()/console.log() is
+                # documentation, not a diagnostic channel — including the mention
+                # inside a string on an otherwise executing line (DECISIONS.md D63).
+                if is_non_code_line(ctx, rel, index + 1) or is_non_code_span(
+                    ctx, rel, index + 1, match.start(), match.end()
+                ):
                     continue
                 per_file += 1
                 call = "print()" if is_python else "console.log()"
@@ -339,6 +352,7 @@ class NoLoggingFrameworkRule(ProjectRule):
             if any(name in text for name in _LOG_JS):
                 return None
         except Exception:  # pragma: no cover - defensive
+            log.debug("logging-framework search failed; skipping the check", exc_info=True)
             return None
         return (
             "No logging framework is imported anywhere in the project and no logging "
@@ -403,6 +417,7 @@ class DebugLogLevelRule(RegexRule):
     )
     max_per_file: ClassVar[int] = 2
     max_total: ClassVar[int] = 8
+    skip_non_code: ClassVar[bool] = True
     recommended_followup: ClassVar[str] = (
         "Read the level from configuration instead: "
         "`logging.basicConfig(level=os.environ.get(\"LOG_LEVEL\", \"INFO\"))`, and set "

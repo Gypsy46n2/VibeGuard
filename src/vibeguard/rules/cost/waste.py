@@ -15,7 +15,7 @@ from vibeguard.core.models import (
     Severity,
 )
 from vibeguard.core.rule import Rule
-from vibeguard.rules._support import is_generated_path, is_test_path
+from vibeguard.rules._support import is_generated_path, is_non_code_line, is_test_path
 
 if TYPE_CHECKING:  # pragma: no cover
     from vibeguard.discovery.context import ScanContext
@@ -60,9 +60,14 @@ _POLL_SLEEP = re.compile(
 #: Binary blobs parked in relational columns.
 _BLOB_COLUMN = re.compile(
     r"Column\(\s*(?:sa\.)?LargeBinary|Column\(\s*(?:sa\.)?BLOB|BinaryField\(|"
-    r"\b(?:BYTEA|LONGBLOB|MEDIUMBLOB|BLOB)\b|"
-    r"(?:image|photo|avatar|file|attachment|document|pdf)_?(?:data|base64|blob|bytes)\s*"
-    r"[=:]|base64\.b64encode\([^)]*\)\s*(?:\)|,)?\s*(?:#.*)?$",
+    # A SQL column declaration (``avatar BYTEA``), not a bare mention of the word:
+    # ``"blob"`` as a dict key or a label is not a schema (DECISIONS.md D65).
+    r"\b[A-Za-z_][A-Za-z0-9_]*\s+(?:BYTEA|LONGBLOB|MEDIUMBLOB|BLOB)\b|"
+    # The name must *start* a word: `_MAX_FILE_BYTES` is a size constant, not a
+    # column, and matching it was a pure false positive (DECISIONS.md D65).
+    r"(?<![A-Za-z0-9_])(?:image|photo|avatar|file|attachment|document|pdf)_?"
+    r"(?:data|base64|blob|bytes)\s*[=:]|"
+    r"base64\.b64encode\([^)]*\)\s*(?:\)|,)?\s*(?:#.*)?$",
     re.IGNORECASE,
 )
 _RETENTION = re.compile(
@@ -132,7 +137,7 @@ class WastefulWorkAndStorageRule(Rule):
             text = ctx.read(rel)
             if not text or len(text) > _MAX_FILE_BYTES:
                 continue
-            for kind, finding in self._file_findings(rel, text):
+            for kind, finding in self._file_findings(ctx, rel, text):
                 if kind in seen_kinds or len(findings) >= _MAX_FINDINGS:
                     continue
                 seen_kinds.add(kind)
@@ -143,7 +148,9 @@ class WastefulWorkAndStorageRule(Rule):
         return findings
 
     # ------------------------------------------------------------------ helpers
-    def _file_findings(self, rel: str, text: str) -> list[tuple[str, Finding]]:
+    def _file_findings(
+        self, ctx: ScanContext, rel: str, text: str
+    ) -> list[tuple[str, Finding]]:
         out: list[tuple[str, Finding]] = []
         lines = text.splitlines()
         for index, line in enumerate(lines):
@@ -151,6 +158,8 @@ class WastefulWorkAndStorageRule(Rule):
                 continue
             stripped = line.strip()
             if stripped.startswith(("#", "//")):
+                continue
+            if is_non_code_line(ctx, rel, index + 1):
                 continue
             window = "\n".join(lines[index : index + 12])
             if _HOT_SCHEDULE.search(line) and _FULL_SCAN.search(window):

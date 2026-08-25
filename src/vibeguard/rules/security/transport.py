@@ -22,6 +22,7 @@ from vibeguard.rules._fixes import (
     replace_line,
     whole_file_patch,
 )
+from vibeguard.rules._support import is_non_code_line
 from vibeguard.rules.security._taint import config_files
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -45,7 +46,12 @@ def _scan(
     negative: re.Pattern[str] | None = None,
     only: re.Pattern[str] | None = None,
 ) -> list[tuple[str, int, str]]:
-    """Non-comment lines matching any pattern; returns (relpath, line_no, text)."""
+    """Executing lines matching any pattern; returns (relpath, line_no, text).
+
+    Comment lines are dropped, and so are lines made entirely of string content: a
+    docstring or a wrapped prose string that *names* ``verify=False`` is documenting
+    the defect, not committing it (DECISIONS.md D63).
+    """
     hits: list[tuple[str, int, str]] = []
     for rel in config_files(ctx, suffixes=_CODE_SUFFIXES, names=_CODE_NAMES):
         if len(hits) >= _MAX:
@@ -61,6 +67,8 @@ def _scan(
             if not any(pattern.search(line) for pattern in patterns):
                 continue
             if negative is not None and negative.search(line):
+                continue
+            if is_non_code_line(ctx, rel, index + 1):
                 continue
             hits.append((rel, index + 1, line.strip()[:200]))
     return hits
