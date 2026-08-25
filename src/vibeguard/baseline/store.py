@@ -85,12 +85,15 @@ def load_baseline(root: str | Path) -> Baseline | None:
         return None
 
 
-def save_baseline(root: str | Path, report: ScanReport) -> Path:
+def save_baseline(root: str | Path, report: ScanReport, *, state: str | Path | None = None) -> Path:
     """Store every open fingerprint in ``report`` as the accepted baseline.
 
     Suppressed findings are already accounted for by their suppression entry, and a
     finding that has been *fixed* is gone — writing either into the baseline would
     exempt something that needs no exemption.
+
+    ``state`` relocates the file (``vibeguard --report-dir``); ``root`` stays the
+    scanned repository, because ``head_sha`` describes the code, not the destination.
     """
     fingerprints = sorted(
         finding.fingerprint
@@ -103,7 +106,7 @@ def save_baseline(root: str | Path, report: ScanReport) -> Path:
         head_sha=head_sha(root),
         fingerprints=fingerprints,
     )
-    path = baseline_path(root)
+    path = baseline_path(state if state is not None else root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(json.loads(baseline.model_dump_json()), indent=2) + "\n", encoding="utf-8"

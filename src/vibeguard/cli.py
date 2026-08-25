@@ -17,6 +17,11 @@
 
 The default is ``table,md``, which — with the always-written JSON — gives the
 documented "json + md" pair plus a readable terminal summary.
+
+Where those files land is a separate question from which ones exist (DECISIONS.md
+D59): ``--report-dir DIR`` moves every written artefact — reports and the
+``.vibeguard/`` state directory alike — out of the scanned repository, and
+``--no-write`` writes nothing anywhere. Auditing never modifies code either way.
 """
 
 from __future__ import annotations
@@ -106,6 +111,15 @@ _OUTPUT_HELP = (
     "vibeguard-report.json is always written."
 )
 
+_REPORT_DIR_HELP = (
+    "Write the report files and .vibeguard/ state (history, baseline) here instead of "
+    "into the scanned repository. Created if missing."
+)
+
+_NO_WRITE_HELP = (
+    "Write nothing at all — no report files, no history. Terminal output only."
+)
+
 
 class OutputError(ValueError):
     """An ``--output`` list naming something VibeGuard cannot produce."""
@@ -147,6 +161,7 @@ def _load_config(
     use_baseline: bool | None = None,
     allow_no_git: bool | None = None,
     deep_validate: bool | None = None,
+    report_dir: Path | None = None,
 ) -> VibeguardConfig:
     config = VibeguardConfig.load(path)
     return config.merge_cli(
@@ -156,6 +171,7 @@ def _load_config(
         use_baseline=use_baseline,
         allow_no_git=allow_no_git,
         deep_validate=deep_validate,
+        report_dir=report_dir,
     )
 
 
@@ -176,7 +192,23 @@ def _write_report(report: ScanReport, root: Path) -> Path:
     return write_json(report, root)
 
 
-def _emit(report: ScanReport, root: Path, outputs: set[str], events: EventBus) -> list[Path]:
+def _write_root(root: Path, config: VibeguardConfig) -> Path:
+    """Where this run writes: the scanned repo, or ``--report-dir``. Created if missing."""
+    destination = config.state_root(root)
+    if destination != root:
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            err_console.print(
+                f"[red]error:[/] could not create the report directory {destination}: {exc}"
+            )
+            raise typer.Exit(EXIT_ERROR) from exc
+    return destination
+
+
+def _emit(
+    report: ScanReport, destination: Path, outputs: set[str], events: EventBus
+) -> list[Path]:
     """Write every requested report file plus the canonical JSON; print the paths.
 
     A scan that cannot record its result is an execution error, not a silent partial
@@ -184,12 +216,13 @@ def _emit(report: ScanReport, root: Path, outputs: set[str], events: EventBus) -
     say so.
     """
     try:
-        paths = write_reports(report, root, outputs, events=events)
+        paths = write_reports(report, destination, outputs, events=events)
     except OSError as exc:
         err_console.print(
             f"[red]error:[/] the scan finished but its report could not be written to "
-            f"{root}: {exc}. VibeGuard writes vibeguard-report.json into the directory "
-            "it scanned, so that directory must be writable."
+            f"{destination}: {exc}. VibeGuard writes vibeguard-report.json into the "
+            "scanned directory unless --report-dir names another one, so that directory "
+            "must be writable."
         )
         raise typer.Exit(EXIT_ERROR) from exc
     for path in paths:
@@ -201,14 +234,23 @@ def _persist_history(report: ScanReport, root: Path, config: VibeguardConfig) ->
     """Store this run so the next one can diff against it (INTERFACES.md §7).
 
     The engine deliberately does not do this (DECISIONS.md D32): writing history is a
-    side effect of *running the tool*, not of computing a report.
+    side effect of *running the tool*, not of computing a report. History lands beside
+    the reports, so ``--report-dir`` moves both together.
     """
     if not config.history.enabled:
         return
     try:
-        write_history(report, root, keep=config.history.keep)
+        write_history(report, config.state_root(root), keep=config.history.keep)
     except OSError as exc:
         err_console.print(f"[yellow]warning:[/] could not record scan history: {exc}")
+
+
+def _note_no_write() -> None:
+    """Say plainly that this run left nothing behind, and what that costs."""
+    console.print(
+        "[dim]--no-write: nothing was written — no report files, no history entry. "
+        "This run is therefore invisible to the next run's regression diff.[/]"
+    )
 
 
 def _print_regression(report: ScanReport) -> None:
@@ -411,6 +453,10 @@ def audit(
         bool, typer.Option("--local-only", help="Never send code off this machine.")
     ] = False,
     output: Annotated[str, typer.Option("--output", "-o", help=_OUTPUT_HELP)] = DEFAULT_OUTPUT,
+    report_dir: Annotated[
+        Path | None, typer.Option("--report-dir", help=_REPORT_DIR_HELP)
+    ] = None,
+    no_write: Annotated[bool, typer.Option("--no-write", help=_NO_WRITE_HELP)] = False,
 ) -> None:
     """Audit a repository (read-only) and write the report files."""
     root = path.resolve()
@@ -420,7 +466,9 @@ def audit(
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
 
-    config = _load_config(root, packs=packs, local_only=local_only or None)
+    config = _load_config(
+        root, packs=packs, local_only=local_only or None, report_dir=report_dir
+    )
     events = EventBus()
     if OutputFormat.JSONL.value in outputs:
         events.subscribe("*", _jsonl_subscriber)
@@ -441,8 +489,11 @@ def audit(
         console.print()
     if OutputFormat.JSON.value in outputs:
         console.print_json(report.model_dump_json())
-    _emit(report, root, outputs, events)
-    _persist_history(report, root, config)
+    if no_write:
+        _note_no_write()
+    else:
+        _emit(report, _write_root(root, config), outputs, events)
+        _persist_history(report, root, config)
     if deep:
         _print_checklist_detail(report)
 
@@ -467,6 +518,9 @@ def fix(
     local_only: Annotated[bool, typer.Option("--local-only")] = False,
     allow_no_git: Annotated[bool, typer.Option("--allow-no-git")] = False,
     output: Annotated[str, typer.Option("--output", "-o", help=_OUTPUT_HELP)] = DEFAULT_OUTPUT,
+    report_dir: Annotated[
+        Path | None, typer.Option("--report-dir", help=_REPORT_DIR_HELP)
+    ] = None,
 ) -> None:
     """Repair findings on a dedicated branch, validating every change."""
     if safe and interactive:
@@ -490,6 +544,7 @@ def fix(
         local_only=local_only or None,
         allow_no_git=allow_no_git or None,
         deep_validate=deep_validate or None,
+        report_dir=report_dir,
     )
     events = EventBus()
     engine = Engine(config, events=events)
@@ -528,7 +583,7 @@ def fix(
     _print_fix_summary(scan_report, engine)
     _print_regression(scan_report)
     console.print()
-    _emit(scan_report, root, outputs, events)
+    _emit(scan_report, _write_root(root, config), outputs, events)
     _persist_history(scan_report, root, config)
     raise typer.Exit(EXIT_OK)
 
@@ -604,12 +659,15 @@ def _print_fix_summary(report: ScanReport, engine: Engine) -> None:
     _print_checklist(report)
 
 
-def _load_last_report(root: Path) -> tuple[ScanReport, str] | None:
-    """The most recent stored scan: history first, then ``vibeguard-report.json``."""
-    stored = latest_history(root)
+def _load_last_report(state: Path) -> tuple[ScanReport, str] | None:
+    """The most recent stored scan: history first, then ``vibeguard-report.json``.
+
+    ``state`` is the scanned repository, or the ``--report-dir`` that received the run.
+    """
+    stored = latest_history(state)
     if stored is not None:
-        return stored, f".vibeguard/{HISTORY_DIRNAME}/"
-    destination = root / REPORT_FILENAME
+        return stored, str(Path(state) / ".vibeguard" / HISTORY_DIRNAME) + "/"
+    destination = state / REPORT_FILENAME
     if not destination.is_file():
         return None
     try:
@@ -625,11 +683,16 @@ def _load_last_report(root: Path) -> tuple[ScanReport, str] | None:
 def report(
     path: Annotated[Path, typer.Argument(help="Repository whose last scan to render.")] = Path("."),
     output: Annotated[str, typer.Option("--output", "-o", help=_OUTPUT_HELP)] = DEFAULT_OUTPUT,
+    report_dir: Annotated[
+        Path | None, typer.Option("--report-dir", help=_REPORT_DIR_HELP)
+    ] = None,
 ) -> None:
     """Re-render the last recorded scan — no rescan, no repository access.
 
     Reads the newest ``.vibeguard/history/`` entry (falling back to
-    ``vibeguard-report.json``) and renders it to the requested formats.
+    ``vibeguard-report.json``) and renders it to the requested formats. With
+    ``--report-dir`` both the reading and the writing happen there, so a scan that was
+    kept out of the repository can be re-rendered without ever touching it.
     """
     root = path.resolve()
     try:
@@ -638,10 +701,12 @@ def report(
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
 
-    loaded = _load_last_report(root)
+    config = _load_config(root, report_dir=report_dir)
+    state = config.state_root(root)
+    loaded = _load_last_report(state)
     if loaded is None:
         err_console.print(
-            f"[red]no recorded scan[/] under {root} — neither .vibeguard/{HISTORY_DIRNAME}/ "
+            f"[red]no recorded scan[/] under {state} — neither .vibeguard/{HISTORY_DIRNAME}/ "
             f"nor {REPORT_FILENAME} holds a readable report. Run [bold]vibeguard audit[/] "
             "first."
         )
@@ -658,7 +723,7 @@ def report(
         console.print()
     if OutputFormat.JSON.value in outputs:
         console.print_json(stored.model_dump_json())
-    _emit(stored, root, outputs, EventBus())
+    _emit(stored, _write_root(root, config), outputs, EventBus())
     raise typer.Exit(EXIT_OK)
 
 
@@ -676,8 +741,16 @@ def ci(
         ),
     ] = True,
     output: Annotated[str, typer.Option("--output", "-o", help=_OUTPUT_HELP)] = DEFAULT_OUTPUT,
+    report_dir: Annotated[
+        Path | None, typer.Option("--report-dir", help=_REPORT_DIR_HELP)
+    ] = None,
+    no_write: Annotated[bool, typer.Option("--no-write", help=_NO_WRITE_HELP)] = False,
 ) -> None:
-    """Run an audit and fail when findings reach the configured threshold."""
+    """Run an audit and fail when findings reach the configured threshold.
+
+    The gate is decided from the report in memory, so ``--no-write`` changes what is
+    left on disk and nothing about the verdict.
+    """
     root = path.resolve()
     try:
         outputs = parse_outputs(output)
@@ -685,7 +758,9 @@ def ci(
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
 
-    config = _load_config(root, fail_on=fail_on, use_baseline=baseline)
+    config = _load_config(
+        root, fail_on=fail_on, use_baseline=baseline, report_dir=report_dir
+    )
     events = EventBus()
     if OutputFormat.JSONL.value in outputs:
         events.subscribe("*", _jsonl_subscriber)
@@ -701,8 +776,11 @@ def ci(
         _print_summary(scan_report)
     if OutputFormat.JSON.value in outputs:
         console.print_json(scan_report.model_dump_json())
-    _emit(scan_report, root, outputs, events)
-    _persist_history(scan_report, root, config)
+    if no_write:
+        _note_no_write()
+    else:
+        _emit(scan_report, _write_root(root, config), outputs, events)
+        _persist_history(scan_report, root, config)
 
     console.print()
     _print_regression(scan_report)
@@ -753,7 +831,7 @@ def graph(
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
 
-    stored = latest_history(root)
+    stored = latest_history(config.state_root(root))
     scan = ScanReport(
         repo=str(root),
         scan_date=datetime.now(UTC),
@@ -800,17 +878,26 @@ def baseline_create(
         list[str] | None, typer.Option("--packs", help="Restrict to these rule packs.")
     ] = None,
     local_only: Annotated[bool, typer.Option("--local-only")] = False,
+    report_dir: Annotated[
+        Path | None, typer.Option("--report-dir", help=_REPORT_DIR_HELP)
+    ] = None,
 ) -> None:
     """Scan, then record every open finding as the accepted baseline.
 
     The baseline is a scheduling decision, not an erasure: baselined findings stay in
     every report, keep counting towards the score, and only stop failing CI.
+
+    ``--report-dir`` writes the baseline to ``DIR/.vibeguard/baseline.json``; later runs
+    must be given the same directory for it to be honoured.
     """
     root = path.resolve()
-    config = _load_config(root, packs=packs, local_only=local_only or None)
+    config = _load_config(
+        root, packs=packs, local_only=local_only or None, report_dir=report_dir
+    )
+    state = _write_root(root, config)
     try:
         scan = Engine(config).audit(root, mode="baseline")
-        destination = save_baseline(root, scan)
+        destination = save_baseline(root, scan, state=state)
     except NotADirectoryError as exc:
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
@@ -818,7 +905,7 @@ def baseline_create(
         err_console.print(f"[red]error:[/] could not write the baseline: {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
 
-    stored = load_baseline(root)
+    stored = load_baseline(state)
     count = len(stored.fingerprints) if stored else 0
     console.print(
         f"baseline written to [bold]{destination}[/] — {count} fingerprint(s) accepted."
@@ -833,11 +920,16 @@ def baseline_create(
 @baseline_app.command("show")
 def baseline_show(
     path: Annotated[Path, typer.Argument()] = Path("."),
+    report_dir: Annotated[
+        Path | None, typer.Option("--report-dir", help=_REPORT_DIR_HELP)
+    ] = None,
 ) -> None:
     """Show the stored baseline."""
     root = path.resolve()
-    destination = baseline_path(root)
-    stored: Baseline | None = load_baseline(root)
+    config = _load_config(root, report_dir=report_dir)
+    state = config.state_root(root)
+    destination = baseline_path(state)
+    stored: Baseline | None = load_baseline(state)
     if stored is None:
         if destination.is_file():
             err_console.print(f"[red]baseline at {destination} is not readable.[/]")

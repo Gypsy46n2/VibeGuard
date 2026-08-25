@@ -113,8 +113,22 @@ class VibeguardConfig(BaseModel):
     ci: CIConfig = Field(default_factory=CIConfig)
     fix: FixConfig = Field(default_factory=FixConfig)
     history: HistoryConfig = Field(default_factory=HistoryConfig)
+    #: Where report files and ``.vibeguard/`` state (history, baseline) are written.
+    #: ``None`` — the default — means the scanned repository itself. A relative value
+    #: in ``.vibeguard.toml`` is resolved against the directory holding that file.
+    report_dir: str | None = None
     #: Absolute path of the config file this instance was loaded from, if any.
     source_path: str | None = None
+
+    def state_root(self, root: str | Path) -> Path:
+        """Where ``.vibeguard/`` (history, baseline) lives for a scan of ``root``.
+
+        Reads and writes agree by construction: point ``report_dir`` somewhere and the
+        regression diff compares against *that* directory's history, not the repo's.
+        Suppressions and ``.vibeguard.toml`` are authored content and are always read
+        from the scanned repository.
+        """
+        return Path(self.report_dir) if self.report_dir else Path(root)
 
     # ------------------------------------------------------------------ loading
     @classmethod
@@ -128,6 +142,10 @@ class VibeguardConfig(BaseModel):
             raw = tomllib.load(fh)
         config = cls.from_dict(raw)
         config.source_path = str(path.resolve())
+        if config.report_dir is not None:
+            # A path in a config file means "relative to the project that config
+            # describes", never "relative to whatever directory the user ran from".
+            config.report_dir = str((path.resolve().parent / config.report_dir).resolve())
         return config
 
     @classmethod
@@ -142,6 +160,8 @@ class VibeguardConfig(BaseModel):
             data["exclude"] = list(dict.fromkeys(DEFAULT_EXCLUDES + list(main["exclude"])))
         if "local_only" in main:
             data["local_only"] = bool(main["local_only"])
+        if "report_dir" in main:
+            data["report_dir"] = str(main["report_dir"])
         for key, model in (
             ("ai", AIConfig),
             ("ci", CIConfig),
@@ -163,6 +183,7 @@ class VibeguardConfig(BaseModel):
         allow_no_git: bool | None = None,
         deep_validate: bool | None = None,
         history: bool | None = None,
+        report_dir: str | Path | None = None,
     ) -> VibeguardConfig:
         """Return a copy with CLI overrides applied (CLI wins over file)."""
         updated = self.model_copy(deep=True)
@@ -180,4 +201,7 @@ class VibeguardConfig(BaseModel):
             updated.fix.deep_validate = deep_validate
         if history is not None:
             updated.history.enabled = history
+        if report_dir is not None:
+            # A CLI path is relative to the shell's cwd, which is what resolve() means.
+            updated.report_dir = str(Path(report_dir).resolve())
         return updated

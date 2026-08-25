@@ -403,7 +403,7 @@ class Engine:
         detection.warnings.extend(outcome.warnings)
 
         self.events.emit("scan.stage", stage="baseline")
-        baseline = load_baseline(ctx.root)
+        baseline = load_baseline(self.config.state_root(ctx.root))
         marked = apply_baseline(
             (f for f in detection.findings if not f.suppressed), baseline
         )
@@ -416,7 +416,9 @@ class Engine:
     def _apply_regression(self, ctx: ScanContext, detection: _Detection) -> None:
         """Diff against the stored history — run last, so fixes count as resolved."""
         self.events.emit("scan.stage", stage="regression")
-        detection.regression = regression_against_history(detection.findings, ctx.root)
+        detection.regression = regression_against_history(
+            detection.findings, self.config.state_root(ctx.root)
+        )
 
     def _build_report(
         self,
