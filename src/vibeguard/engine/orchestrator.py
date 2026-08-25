@@ -20,6 +20,7 @@ from typing import Literal
 
 from vibeguard import __version__
 from vibeguard.adapters import ToolAdapter, build_adapters
+from vibeguard.ai.gateway import AIGateway
 from vibeguard.baseline import (
     apply_baseline,
     apply_suppressions,
@@ -80,6 +81,8 @@ class _Detection:
     #: Non-fatal problems (expired suppressions, unreadable memory files).
     warnings: list[str] = field(default_factory=list)
     regression: RegressionDiff | None = None
+    #: Rules skipped because they need an AI provider and none was available.
+    ai_skipped: list[str] = field(default_factory=list)
 
 
 class Engine:
@@ -92,14 +95,18 @@ class Engine:
         events: EventBus | None = None,
         registry: RuleRegistry | None = None,
         adapters: list[ToolAdapter] | None = None,
+        ai: AIGateway | None = None,
     ) -> None:
         self.config = config or VibeguardConfig()
         self.events = events or EventBus()
         self._registry = registry
         self._adapters = adapters
+        self._ai = ai
         #: Populated by :meth:`fix`, so the CLI can report branch and validation context.
         self.last_git_safety: GitSafety | None = None
         self.last_validation: ValidationEngine | None = None
+        #: Rule ids skipped by the last :meth:`select_rules` for want of an AI provider.
+        self.last_ai_skipped: list[str] = []
 
     # ------------------------------------------------------------- registry
     @property
@@ -113,6 +120,13 @@ class Engine:
         if self._adapters is None:
             self._adapters = build_adapters()
         return self._adapters
+
+    @property
+    def ai(self) -> AIGateway:
+        """The run's AI gateway. Built once, with the ``local_only`` gate applied."""
+        if self._ai is None:
+            self._ai = AIGateway.from_config(self.config, events=self.events)
+        return self._ai
 
     # ------------------------------------------------------------- discovery
     def build_context(self, path: str | Path) -> ScanContext:
@@ -150,20 +164,34 @@ class Engine:
             graph=graph,
             scale=scale,
             config=self.config,
+            ai=self.ai,
         )
         ctx._read_cache.update(cache)
         return ctx
 
     # ------------------------------------------------------------- selection
     def select_rules(self, ctx: ScanContext) -> list[Rule]:
-        """Instantiated rules whose applicability gate passes for this repo."""
+        """Instantiated rules whose applicability gate passes for this repo.
+
+        A rule declaring ``requires_ai`` is additionally gated on a usable provider.
+        Without one it is *not* run — a rule that needs a model does not have a
+        deterministic half we could quietly substitute — and its id is recorded so the
+        report can say the scan was degraded rather than imply full coverage.
+        """
         selected: list[Rule] = []
+        degraded: list[str] = []
+        ai_available = ctx.ai_available()
         for rule in self.registry.instantiate():
             try:
-                if rule.applicable(ctx):
-                    selected.append(rule)
+                if not rule.applicable(ctx):
+                    continue
+                if rule.requires_ai and not ai_available:
+                    degraded.append(rule.id)
+                    continue
+                selected.append(rule)
             except Exception:
                 log.warning("rule %s applicable() failed (skipped)", rule.id, exc_info=True)
+        self.last_ai_skipped = degraded
         return selected
 
     # ------------------------------------------------------------- detection
@@ -187,6 +215,8 @@ class Engine:
     # -------------------------------------------------------------- adapters
     def _gate_reason(self, rule: Rule, ctx: ScanContext) -> str:
         """Why ``rule`` did not apply — surfaced in NOT_APPLICABLE checklist notes."""
+        if rule.requires_ai and not ctx.ai_available():
+            return "requires an AI provider (none available — deterministic run)"
         if ctx.scale.scale.order < rule.min_scale.order:
             return f"requires scale >= {rule.min_scale.value} (project is {ctx.scale.scale.value})"
         if rule.technologies and not ({t.lower() for t in rule.technologies}
@@ -341,14 +371,22 @@ class Engine:
         external, adapters_used, adapters_ran = self._run_adapters(ctx)
         findings = self._dedup(self._merge_adapter_findings(findings, self._dedup(external)))
         categories |= {f.category for f in external}
-        return _Detection(
+        detection = _Detection(
             all_rules=all_rules,
             rules=rules,
             findings=findings,
             adapters_used=adapters_used,
             adapters_ran=adapters_ran,
             categories=categories,
+            ai_skipped=list(self.last_ai_skipped),
         )
+        if detection.ai_skipped:
+            detection.warnings.append(
+                f"{len(detection.ai_skipped)} AI-assisted rule(s) did not run "
+                f"({', '.join(detection.ai_skipped)}): {self.ai.describe()}. The scan is "
+                "deterministic-only — coverage of those topics is not claimed."
+            )
+        return detection
 
     # ---------------------------------------------------------------- memory
     def _apply_memory(self, ctx: ScanContext, detection: _Detection) -> None:
@@ -413,8 +451,10 @@ class Engine:
             adapters_used=detection.adapters_used,
             validators_used=validators_used or [],
             baseline_validation=baseline_validation or [],
-            ai_used=False,
-            local_only=self.config.local_only or self.config.ai.provider == "null",
+            # Truthful, not aspirational: ``used`` only becomes true once a completion
+            # has actually come back from the provider.
+            ai_used=self.ai.used,
+            local_only=self.config.local_only or self.ai.is_local,
             suppressions=detection.suppressions,
             warnings=detection.warnings,
         )

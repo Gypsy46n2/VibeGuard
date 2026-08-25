@@ -12,7 +12,13 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-__all__ = ["EventBus", "EVENT_NAMES", "Subscriber"]
+__all__ = [
+    "EventBus",
+    "ALL_EVENT_NAMES",
+    "EVENT_NAMES",
+    "EXTENSION_EVENT_NAMES",
+    "Subscriber",
+]
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +37,30 @@ EVENT_NAMES: tuple[str, ...] = (
     "validation.completed",
     "report.generated",
 )
+
+#: Names VibeGuard emits **in addition** to §6. The §6 tuple is the contract and is
+#: never edited; these are additive, and a subscriber that only knows §6 keeps working
+#: because it simply never matches them (DECISIONS.md D41).
+#:
+#: ``ai.external_send``
+#:     Emitted immediately *before* a prompt is sent to a non-local AI provider.
+#:     Payload: ``provider``, ``endpoint``, ``model``, ``characters``.
+#: ``ai.blocked``
+#:     Emitted when ``local_only`` refused a non-local provider.
+#:     Payload: ``provider``, ``reason``, ``local_only``.
+#: ``repro.generated`` / ``repro.result``
+#:     Emitted by the repro-test generator (``vibeguard.testing``).
+#:     Payload: ``finding``, ``rule_id``, ``path`` (+ ``phase``, ``passed`` for the
+#:     result).
+EXTENSION_EVENT_NAMES: tuple[str, ...] = (
+    "ai.external_send",
+    "ai.blocked",
+    "repro.generated",
+    "repro.result",
+)
+
+#: Every name VibeGuard can emit.
+ALL_EVENT_NAMES: tuple[str, ...] = EVENT_NAMES + EXTENSION_EVENT_NAMES
 
 
 class EventBus:

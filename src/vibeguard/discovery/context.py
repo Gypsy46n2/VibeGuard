@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from vibeguard.ai.gateway import AIGateway
 from vibeguard.core.config import VibeguardConfig
 from vibeguard.core.models import ArchitectureGraph, ScaleProfile, TechProfile
 
@@ -70,6 +71,12 @@ class ScanContext(BaseModel):
     graph: ArchitectureGraph
     scale: ScaleProfile
     config: VibeguardConfig
+    #: The run's AI gateway (INTERFACES.md §10), or ``None`` when the engine did not
+    #: build one. Rules declaring ``requires_ai`` are only run when
+    #: :meth:`ai_available` is true, so a rule may use ``ctx.ai.complete(...)``
+    #: directly; anything else should go through ``ctx.ai.try_complete(...)`` and fall
+    #: back to a deterministic answer.
+    ai: AIGateway | None = None
 
     _read_cache: dict[str, str] = PrivateAttr(default_factory=dict)
     _ast_cache: dict[str, Any] = PrivateAttr(default_factory=dict)
@@ -108,6 +115,10 @@ class ScanContext(BaseModel):
         return tree
 
     # -------------------------------------------------------------- helpers
+    def ai_available(self) -> bool:
+        """True when an AI provider is configured, permitted, and usable."""
+        return self.ai is not None and self.ai.available
+
     def exists(self, relpath: str) -> bool:
         """True when the path exists on disk under the repo root."""
         return (self.root / relpath).exists()
