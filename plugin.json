@@ -78,7 +78,8 @@
       "ai.external_send": ["provider", "endpoint", "model", "characters"],
       "ai.blocked": ["provider", "reason", "local_only"],
       "repro.generated": ["finding", "rule_id", "path", "describes"],
-      "repro.result": ["finding", "rule_id", "path", "phase", "passed", "detail"]
+      "repro.result": ["finding", "rule_id", "path", "phase", "passed", "detail"],
+      "scan.discovery_progress": ["phase", "files", "total", "detail"]
     }
   },
   "privacy": {

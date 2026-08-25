@@ -31,6 +31,8 @@ import logging
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
@@ -439,6 +441,50 @@ def _root(
         raise typer.Exit(EXIT_OK)
 
 
+@contextmanager
+def _scan_progress(events: EventBus) -> Iterator[None]:
+    """A spinner that says what the scan is actually doing, on stderr.
+
+    Discovery walks the whole tree before a single rule runs, which used to look like
+    a hang. ``scan.stage`` names the phase and ``scan.discovery_progress`` fills in the
+    file counter underneath it. Rendered on **stderr** so it can never contaminate
+    ``-o json`` / ``-o jsonl`` on stdout, and skipped entirely when stderr is not a
+    terminal (CI logs, pipes).
+    """
+    if not err_console.is_terminal:
+        yield
+        return
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=err_console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("starting", total=None)
+        state = {"stage": "starting"}
+
+        def on_stage(_name: str, payload: dict[str, Any]) -> None:
+            state["stage"] = str(payload.get("stage", ""))
+            progress.update(task, description=state["stage"])
+
+        def on_discovery(_name: str, payload: dict[str, Any]) -> None:
+            total = payload.get("total")
+            counter = f"{payload.get('files', 0)}" + (f"/{total}" if total else "")
+            detail = str(payload.get("detail", ""))[-48:]
+            progress.update(
+                task,
+                description=f"{payload.get('phase', state['stage'])} · {counter} files · {detail}",
+            )
+
+        events.subscribe("scan.stage", on_stage)
+        events.subscribe("scan.discovery_progress", on_discovery)
+        try:
+            yield
+        finally:
+            events.unsubscribe(on_stage)
+            events.unsubscribe(on_discovery)
+
+
 @app.command()
 def audit(
     path: Annotated[Path, typer.Argument(help="Repository to audit.")] = Path("."),
@@ -475,7 +521,8 @@ def audit(
 
     try:
         engine = Engine(config, events=events)
-        report = engine.audit(root)
+        with _scan_progress(events):
+            report = engine.audit(root)
     except NotADirectoryError as exc:
         err_console.print(f"[red]error:[/] {exc}")
         raise typer.Exit(EXIT_ERROR) from exc
@@ -561,6 +608,16 @@ def fix(
                 "scan.stage",
                 lambda _n, payload: progress.update(
                     task, description=str(payload.get("stage", ""))
+                ),
+            )
+            events.subscribe(
+                "scan.discovery_progress",
+                lambda _n, payload: progress.update(
+                    task,
+                    description=(
+                        f"{payload.get('phase', 'discovery')} · "
+                        f"{payload.get('files', 0)} files"
+                    ),
                 ),
             )
             events.subscribe(

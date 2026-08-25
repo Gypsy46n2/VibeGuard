@@ -703,6 +703,15 @@ function markPhase(stage) {
   });
 }
 
+// scan.discovery_progress refines the "Reading the project" row with a live file
+// counter. Additive: if the server never emits it, the row behaves exactly as before.
+function markDiscoveryProgress(d) {
+  const entry = runner.nodes["discovery"];
+  if (!entry || entry.node.getAttribute("data-state") !== "active") return;
+  const total = d.total ? "/" + d.total : "";
+  entry.note.textContent = (d.files || 0) + total + " files";
+}
+
 function finishPhases() {
   for (const phase of runner.phases) {
     const entry = runner.nodes[phase.key];
@@ -747,6 +756,7 @@ function openStream(scanId, kind) {
 
   on("scan.started", (d) => logLine("scan.started " + (d.mode || "")));
   on("scan.stage", (d) => { markPhase(String(d.stage || "")); logLine("stage " + d.stage); });
+  on("scan.discovery_progress", (d) => markDiscoveryProgress(d));
   on("scan.issue_found", (d) => {
     const finding = d.finding || {};
     if (finding.suppressed) return;
