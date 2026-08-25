@@ -152,7 +152,7 @@ class Engine:
         if rule.technologies and not ({t.lower() for t in rule.technologies}
                                       & ctx.tech.all_technologies()):
             return "requires " + "/".join(sorted(rule.technologies)) + " (not detected)"
-        return "rule preconditions not met in this repository"
+        return rule.not_applicable_note or "rule preconditions not met in this repository"
 
     def _run_adapters(self, ctx: ScanContext) -> tuple[list[Finding], list[str], list[ToolAdapter]]:
         """Run every applicable, available adapter. Returns (findings, log, ran)."""

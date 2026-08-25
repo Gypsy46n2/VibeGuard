@@ -68,10 +68,17 @@ class NoEndToEndTestsRule(ProjectRule):
         "staging deploy in CI as a post-deploy smoke check."
     )
 
+    not_applicable_note: ClassVar[str] = (
+        "the project has no test suite at all — VG-MAINT-001 reports that, and this "
+        "topic cannot be assessed until tests exist"
+    )
+
+    def applicable(self, ctx: ScanContext) -> bool:
+        # Unassessable, not passing, when the project has no tests at all.
+        return super().applicable(ctx) and has_test_suite(ctx)
+
     def check(self, ctx: ScanContext) -> tuple[str, str] | None:
         try:
-            if not has_test_suite(ctx):
-                return None  # VG-MAINT-001 already reports "no tests at all".
             frameworks = {name.lower() for name in ctx.tech.test_frameworks}
             if frameworks & {"playwright", "cypress", "selenium", "puppeteer"}:
                 return None
@@ -143,10 +150,17 @@ class NoNonFunctionalTestsRule(ProjectRule):
         "regression test for each security bug you have already fixed."
     )
 
+    not_applicable_note: ClassVar[str] = (
+        "the project has no test suite at all — VG-MAINT-001 reports that, and this "
+        "topic cannot be assessed until tests exist"
+    )
+
+    def applicable(self, ctx: ScanContext) -> bool:
+        # Unassessable, not passing, when the project has no tests at all.
+        return super().applicable(ctx) and has_test_suite(ctx)
+
     def check(self, ctx: ScanContext) -> tuple[str, str] | None:
         try:
-            if not has_test_suite(ctx):
-                return None  # VG-MAINT-001 already reports "no tests at all".
             haystack = test_text(ctx) + "\n" + test_paths_text(ctx)
             manifests = "\n".join(ctx.read(rel).lower() for rel in ctx.tech.manifest_files)
             combined = haystack + "\n" + manifests

@@ -45,6 +45,9 @@ class Rule(ABC):
     min_scale: ClassVar[ScaleClass] = ScaleClass.TOY
     autofix_safety: ClassVar[AutofixSafety] = AutofixSafety.MANUAL_CHANGE_REQUIRED
     requires_ai: ClassVar[bool] = False
+    #: Why this rule's topics are NOT_APPLICABLE when a custom ``applicable()``
+    #: precondition (rather than the tech/scale gate) rejects a repository.
+    not_applicable_note: ClassVar[str] = ""
 
     # ------------------------------------------------------------ applicability
     def applicable(self, ctx: ScanContext) -> bool:

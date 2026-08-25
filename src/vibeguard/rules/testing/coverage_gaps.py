@@ -76,13 +76,18 @@ class NoIntegrationTestsRule(ProjectRule):
         "shape of the response body."
     )
 
+    not_applicable_note: ClassVar[str] = (
+        "the project has no test suite at all — VG-MAINT-001 reports that, and this "
+        "topic cannot be assessed until tests exist"
+    )
+
     def applicable(self, ctx: ScanContext) -> bool:
-        return super().applicable(ctx) and bool(ctx.tech.backend)
+        # No tests at all is VG-MAINT-001's finding; this topic is then unassessable,
+        # which the checklist must show as NOT_APPLICABLE rather than PASS.
+        return super().applicable(ctx) and bool(ctx.tech.backend) and has_test_suite(ctx)
 
     def check(self, ctx: ScanContext) -> tuple[str, str] | None:
         try:
-            if not has_test_suite(ctx):
-                return None  # VG-MAINT-001 already reports "no tests at all".
             text = test_text(ctx)
             if any(token in text for token in _HTTP_TEST_TOKENS):
                 return None
@@ -140,13 +145,20 @@ class NoDatabaseTestsRule(ProjectRule):
         "test — then cover the two or three queries whose results users actually see."
     )
 
+    not_applicable_note: ClassVar[str] = (
+        "the project has no test suite at all — VG-MAINT-001 reports that, and this "
+        "topic cannot be assessed until tests exist"
+    )
+
     def applicable(self, ctx: ScanContext) -> bool:
-        return super().applicable(ctx) and bool(ctx.tech.databases or ctx.tech.orms)
+        return (
+            super().applicable(ctx)
+            and bool(ctx.tech.databases or ctx.tech.orms)
+            and has_test_suite(ctx)
+        )
 
     def check(self, ctx: ScanContext) -> tuple[str, str] | None:
         try:
-            if not has_test_suite(ctx):
-                return None  # VG-MAINT-001 already reports "no tests at all".
             if _DB_TEST_RE.search(test_text(ctx)):
                 return None
         except Exception:  # pragma: no cover - defensive

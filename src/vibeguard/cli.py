@@ -152,6 +152,33 @@ def _print_checklist(report: ScanReport) -> None:
     )
 
 
+def _print_checklist_detail(report: ScanReport) -> None:
+    """``--deep``: every checklist topic with its status, detectors, and note."""
+    if not report.checklist:
+        return
+    section = ""
+    table: Table | None = None
+    for item in report.checklist:
+        if item.section != section:
+            if table is not None:
+                console.print(table)
+            section = item.section
+            table = Table(title=f"checklist · {section}")
+            table.add_column("topic")
+            table.add_column("status")
+            table.add_column("detectors")
+            table.add_column("note")
+        detail = item.note or item.validation
+        table.add_row(
+            item.name,
+            f"[{_CHECKLIST_STYLE[item.status]}]{item.status.value}[/]",
+            ", ".join(item.detectors) or "[dim]none[/]",
+            detail[:70],
+        )
+    if table is not None:
+        console.print(table)
+
+
 def _print_summary(report: ScanReport) -> None:
     stack = Table(title="Detected stack", show_header=False, box=None, pad_edge=False)
     stack.add_column("field", style="bold")
@@ -247,7 +274,10 @@ def _root(
 @app.command()
 def audit(
     path: Annotated[Path, typer.Argument(help="Repository to audit.")] = Path("."),
-    deep: Annotated[bool, typer.Option("--deep", help="Deep audit (M2+).")] = False,
+    deep: Annotated[
+        bool,
+        typer.Option("--deep", help="Report every checklist topic, not just findings."),
+    ] = False,
     packs: Annotated[
         list[str] | None, typer.Option("--packs", help="Restrict to these rule packs.")
     ] = None,
@@ -288,7 +318,7 @@ def audit(
             f"{output.value} rendering lands in M4; JSON report written to {destination}"
         )
     if deep:
-        console.print("[yellow]--deep has no additional effect until M2.[/]")
+        _print_checklist_detail(report)
 
 
 @app.command()
@@ -518,7 +548,7 @@ def list_rules(
             cls.autofix_safety.value,
         )
     console.print(table)
-    console.print(f"{shown} rule(s); more packs land in M2.")
+    console.print(f"{shown} rule(s) across {len({e.pack for e in registry.registered})} pack(s).")
     raise typer.Exit(EXIT_OK)
 
 
