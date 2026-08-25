@@ -1,7 +1,13 @@
 """Engine — discovery → rule selection → detection → dedup → scoring → report.
 
 INTERFACES.md §9: ``Engine(config).audit(path) / .fix(path, mode) / .ci(path)``.
-M1 implements audit and ci; fix arrives in M3.
+
+Between detection and scoring the engine consults VibeGuard's own memory under
+``.vibeguard/`` (INTERFACES.md §7): suppressions mark findings a human has accepted,
+the baseline marks findings the team has scheduled rather than fixed, and the stored
+history yields the regression diff. All three are **read**; nothing under
+``.vibeguard/`` is written here — persistence stays with the caller (DECISIONS.md
+D8, D32), so ``audit`` remains a pure function of the repository.
 """
 
 from __future__ import annotations
@@ -14,6 +20,12 @@ from typing import Literal
 
 from vibeguard import __version__
 from vibeguard.adapters import ToolAdapter, build_adapters
+from vibeguard.baseline import (
+    apply_baseline,
+    apply_suppressions,
+    load_baseline,
+    regression_against_history,
+)
 from vibeguard.core.config import VibeguardConfig
 from vibeguard.core.events import EventBus
 from vibeguard.core.fingerprint import normalize
@@ -22,8 +34,11 @@ from vibeguard.core.models import (
     ChecklistItem,
     Finding,
     FixStatus,
+    RegressionDiff,
     ScanReport,
     Severity,
+    SuppressionEntry,
+    ValidationStep,
 )
 from vibeguard.core.registry import RuleRegistry, build_registry
 from vibeguard.core.rule import Rule
@@ -60,6 +75,11 @@ class _Detection:
     adapters_used: list[str] = field(default_factory=list)
     adapters_ran: list[ToolAdapter] = field(default_factory=list)
     categories: set[Category] = field(default_factory=set)
+    #: Suppression entries that were honoured or configured — reported verbatim.
+    suppressions: list[SuppressionEntry] = field(default_factory=list)
+    #: Non-fatal problems (expired suppressions, unreadable memory files).
+    warnings: list[str] = field(default_factory=list)
+    regression: RegressionDiff | None = None
 
 
 class Engine:
@@ -330,6 +350,36 @@ class Engine:
             categories=categories,
         )
 
+    # ---------------------------------------------------------------- memory
+    def _apply_memory(self, ctx: ScanContext, detection: _Detection) -> None:
+        """Fold ``.vibeguard/`` into the detection: suppressions, baseline, history.
+
+        Order matters. Suppressions run first, because a suppressed finding is one a
+        human already judged and should not also be reported as "baselined"; the
+        baseline then marks what is left. Both run *before* any repair, so the fixer
+        never spends a patch on a finding somebody already waived.
+        """
+        self.events.emit("scan.stage", stage="suppressions")
+        outcome = apply_suppressions(detection.findings, ctx.root, ctx.read)
+        detection.suppressions = list(outcome.entries)
+        detection.warnings.extend(outcome.warnings)
+
+        self.events.emit("scan.stage", stage="baseline")
+        baseline = load_baseline(ctx.root)
+        marked = apply_baseline(
+            (f for f in detection.findings if not f.suppressed), baseline
+        )
+        if marked and not self.config.ci.use_baseline:
+            detection.warnings.append(
+                f"{marked} finding(s) are in .vibeguard/baseline.json but the baseline is "
+                "disabled for this run — they still count towards the CI gate"
+            )
+
+    def _apply_regression(self, ctx: ScanContext, detection: _Detection) -> None:
+        """Diff against the stored history — run last, so fixes count as resolved."""
+        self.events.emit("scan.stage", stage="regression")
+        detection.regression = regression_against_history(detection.findings, ctx.root)
+
     def _build_report(
         self,
         ctx: ScanContext,
@@ -342,6 +392,7 @@ class Engine:
         scores_after: list | None = None,
         overall_after: int | None = None,
         validators_used: list[str] | None = None,
+        baseline_validation: list[ValidationStep] | None = None,
     ) -> ScanReport:
         return ScanReport(
             repo=str(ctx.root),
@@ -358,12 +409,14 @@ class Engine:
             overall_before=overall_before,
             overall_after=overall_after,
             counts=self._counts(detection.findings),
-            regression=None,
+            regression=detection.regression,
             adapters_used=detection.adapters_used,
             validators_used=validators_used or [],
+            baseline_validation=baseline_validation or [],
             ai_used=False,
             local_only=self.config.local_only or self.config.ai.provider == "null",
-            suppressions=[],
+            suppressions=detection.suppressions,
+            warnings=detection.warnings,
         )
 
     # ----------------------------------------------------------------- audit
@@ -374,6 +427,8 @@ class Engine:
 
         ctx = self.build_context(root)
         detection = self._detection_pass(ctx)
+        self._apply_memory(ctx, detection)
+        self._apply_regression(ctx, detection)
 
         self.events.emit("scan.stage", stage="checklist")
         checklist = self.build_checklist(
@@ -406,17 +461,23 @@ class Engine:
         counts: dict[str, int] = {severity.value: 0 for severity in Severity}
         counts["total"] = len(findings)
         counts["suppressed"] = 0
+        counts["baselined"] = 0
         for category in Category:
             counts.setdefault(f"category:{category.value}", 0)
+        # Every fix status is seeded, so a consumer can distinguish "zero failures"
+        # from "this report does not track failures".
+        for status in FixStatus:
+            counts[f"status:{status.value}"] = 0
         for finding in findings:
             if finding.suppressed:
                 counts["suppressed"] += 1
                 continue
             counts[finding.severity.value] += 1
             counts[f"category:{finding.category.value}"] += 1
+            if finding.baselined:
+                counts["baselined"] += 1
             if finding.fix is not None:
-                key = f"status:{finding.fix.status.value}"
-                counts[key] = counts.get(key, 0) + 1
+                counts[f"status:{finding.fix.status.value}"] += 1
         return counts
 
     # ------------------------------------------------------------------- fix
@@ -440,6 +501,7 @@ class Engine:
 
         ctx = self.build_context(root)
         detection = self._detection_pass(ctx)
+        self._apply_memory(ctx, detection)
 
         self.events.emit("scan.stage", stage="git.preflight")
         git = GitSafety(root, allow_no_git=self.config.fix.allow_no_git)
@@ -461,10 +523,15 @@ class Engine:
             config=self.config,
             confirm=confirm,
         )
-        findings = fixer.repair(ctx, detection.findings, mode)
+        # A suppressed finding has already been judged by a human; spending a patch on
+        # it would override that judgement (INTERFACES.md §7).
+        repairable = [f for f in detection.findings if not f.suppressed]
+        repaired = {f.id: f for f in fixer.repair(ctx, repairable, mode)}
+        findings = [repaired.get(f.id, f) for f in detection.findings]
         detection.findings = findings
         self.last_git_safety = git
         self.last_validation = validation
+        self._apply_regression(ctx, detection)
 
         self.events.emit("scan.stage", stage="checklist")
         checklist = self.build_checklist(
@@ -486,6 +553,7 @@ class Engine:
             scores_after=scores_after,
             overall_after=overall_after,
             validators_used=validation.validators_used(),
+            baseline_validation=validation.baseline_steps,
         )
         self.events.emit(
             "scan.completed",
@@ -504,10 +572,24 @@ class Engine:
         exit_code = EXIT_FINDINGS if self.threshold_breached(report) else EXIT_OK
         return report, exit_code
 
-    def threshold_breached(self, report: ScanReport) -> bool:
-        """True when any open finding is at or above the configured ``fail_on``."""
-        threshold = self.config.ci.fail_on.order
-        return any(
-            not finding.suppressed and finding.severity.order >= threshold
+    def gating_findings(self, report: ScanReport) -> list[Finding]:
+        """The findings the CI gate is allowed to consider.
+
+        Suppressed findings are out unconditionally (a human accepted them). Baselined
+        findings are out only when ``[ci] use_baseline`` is on — the baseline is a
+        scheduling decision, and turning it off must bring those findings straight
+        back into the gate rather than quietly leaving them exempt.
+        """
+        use_baseline = self.config.ci.use_baseline
+        return [
+            finding
             for finding in report.findings
-        )
+            if not finding.suppressed
+            and not (use_baseline and finding.baselined)
+            and (finding.fix is None or finding.fix.status is not FixStatus.FIXED)
+        ]
+
+    def threshold_breached(self, report: ScanReport) -> bool:
+        """True when any gating finding is at or above the configured ``fail_on``."""
+        threshold = self.config.ci.fail_on.order
+        return any(f.severity.order >= threshold for f in self.gating_findings(report))
