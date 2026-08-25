@@ -14,6 +14,7 @@ __all__ = [
     "AIConfig",
     "CIConfig",
     "FixConfig",
+    "HistoryConfig",
     "VibeguardConfig",
     "CONFIG_FILENAME",
     "DEFAULT_PACKS",
@@ -46,6 +47,14 @@ DEFAULT_PACKS: list[str] = [
 ]
 
 DEFAULT_EXCLUDES: list[str] = [
+    # VibeGuard's own memory and output. A report names every defect it found, so
+    # scanning it makes "is a backup configured anywhere?" answer yes on the strength
+    # of our own prose — the previous run's findings must never become this run's
+    # evidence.
+    "**/.vibeguard/**",
+    "**/vibeguard-report.json",
+    "**/vibeguard-report.md",
+    "**/vibeguard-report.html",
     "**/node_modules/**",
     "**/.venv/**",
     "**/venv/**",
@@ -82,6 +91,14 @@ class FixConfig(BaseModel):
     validation_timeout_targeted: int = 120
 
 
+class HistoryConfig(BaseModel):
+    """``.vibeguard/history/`` persistence — the input to the regression diff."""
+
+    enabled: bool = True
+    #: How many entries to keep; older ones are pruned. 0 keeps everything.
+    keep: int = 50
+
+
 class VibeguardConfig(BaseModel):
     """Effective configuration. CLI flags override file values."""
 
@@ -91,6 +108,7 @@ class VibeguardConfig(BaseModel):
     ai: AIConfig = Field(default_factory=AIConfig)
     ci: CIConfig = Field(default_factory=CIConfig)
     fix: FixConfig = Field(default_factory=FixConfig)
+    history: HistoryConfig = Field(default_factory=HistoryConfig)
     #: Absolute path of the config file this instance was loaded from, if any.
     source_path: str | None = None
 
@@ -120,7 +138,12 @@ class VibeguardConfig(BaseModel):
             data["exclude"] = list(dict.fromkeys(DEFAULT_EXCLUDES + list(main["exclude"])))
         if "local_only" in main:
             data["local_only"] = bool(main["local_only"])
-        for key, model in (("ai", AIConfig), ("ci", CIConfig), ("fix", FixConfig)):
+        for key, model in (
+            ("ai", AIConfig),
+            ("ci", CIConfig),
+            ("fix", FixConfig),
+            ("history", HistoryConfig),
+        ):
             section = raw.get(key)
             if isinstance(section, dict):
                 data[key] = model(**section)
@@ -135,6 +158,7 @@ class VibeguardConfig(BaseModel):
         use_baseline: bool | None = None,
         allow_no_git: bool | None = None,
         deep_validate: bool | None = None,
+        history: bool | None = None,
     ) -> VibeguardConfig:
         """Return a copy with CLI overrides applied (CLI wins over file)."""
         updated = self.model_copy(deep=True)
@@ -150,4 +174,6 @@ class VibeguardConfig(BaseModel):
             updated.fix.allow_no_git = allow_no_git
         if deep_validate is not None:
             updated.fix.deep_validate = deep_validate
+        if history is not None:
+            updated.history.enabled = history
         return updated

@@ -239,6 +239,8 @@ class Finding(BaseModel):
     recommended_followup: str = ""
     suppressed: bool = False
     suppression: SuppressionEntry | None = None
+    #: Fingerprint present in ``.vibeguard/baseline.json`` — reported, never gated on.
+    baselined: bool = False
     fix: FixRecord | None = None
 
 
@@ -387,9 +389,16 @@ class ScanReport(BaseModel):
     regression: RegressionDiff | None = None
     adapters_used: list[str] = Field(default_factory=list)
     validators_used: list[str] = Field(default_factory=list)
+    #: The validation ladder as it ran over the untouched repository, before any fix.
+    #: Failures here are excluded from post-fix verdicts (DECISIONS.md D21) and must
+    #: stay visible, so the exclusions are auditable in every renderer.
+    baseline_validation: list[ValidationStep] = Field(default_factory=list)
     ai_used: bool = False
     local_only: bool = True
     suppressions: list[SuppressionEntry] = Field(default_factory=list)
+    #: Non-fatal problems worth surfacing in the report (expired suppressions,
+    #: unreadable baseline files, …). Never silently swallowed.
+    warnings: list[str] = Field(default_factory=list)
 
 
 def __getattr__(name: str) -> Any:
