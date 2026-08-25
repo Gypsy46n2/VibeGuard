@@ -74,6 +74,12 @@ class CIConfig(BaseModel):
 
 class FixConfig(BaseModel):
     allow_no_git: bool = False
+    #: Run the container-build rung of the validation ladder (``fix --deep-validate``).
+    deep_validate: bool = False
+    #: Seconds allowed for project-wide validators (full test suite, build).
+    validation_timeout_full: int = 600
+    #: Seconds allowed for change-scoped validators (syntax, lint, targeted tests).
+    validation_timeout_targeted: int = 120
 
 
 class VibeguardConfig(BaseModel):
@@ -128,6 +134,7 @@ class VibeguardConfig(BaseModel):
         fail_on: Severity | None = None,
         use_baseline: bool | None = None,
         allow_no_git: bool | None = None,
+        deep_validate: bool | None = None,
     ) -> VibeguardConfig:
         """Return a copy with CLI overrides applied (CLI wins over file)."""
         updated = self.model_copy(deep=True)
@@ -141,4 +148,6 @@ class VibeguardConfig(BaseModel):
             updated.ci.use_baseline = use_baseline
         if allow_no_git is not None:
             updated.fix.allow_no_git = allow_no_git
+        if deep_validate is not None:
+            updated.fix.deep_validate = deep_validate
         return updated
