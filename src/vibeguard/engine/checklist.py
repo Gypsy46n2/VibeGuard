@@ -15,6 +15,12 @@ status. Statuses are derived from what actually ran:
     The open findings are advisory (they need a human judgement call), **or** the
     topic has no automated detector at all. The honest fallback: never converted
     to ``PASS``.
+
+A **suppressed** finding is not open (INTERFACES.md §8 excludes it from scoring, and
+the same reasoning applies to the checklist verdict: a human looked at it and accepted
+it). A topic whose only findings are suppressed therefore reads ``PASS`` — but never
+silently: the count and the suppression reasons are appended to the item's ``note``,
+so the waiver is visible on the same row as the verdict (DECISIONS.md D31).
 """
 
 from __future__ import annotations
@@ -162,6 +168,7 @@ def derive_checklist(
 
         open_findings = [f for f in attributed if _is_open(f)]
         fixed_findings = [f for f in attributed if _is_fixed(f)]
+        suppressed_findings = [f for f in attributed if f.suppressed]
 
         note = ""
         validation = ""
@@ -185,7 +192,22 @@ def derive_checklist(
             validation = _validation_summary(fixed_findings)
         else:
             status = ChecklistStatus.PASS
-            note = f"checked by {len(applicable_detectors)} detector(s), no findings"
+            note = f"checked by {len(applicable_detectors)} detector(s), no open findings"
+
+        if suppressed_findings:
+            # A suppressed finding is excluded from the status, never from the record:
+            # a topic must not read as clean without saying what was waived.
+            reasons = sorted(
+                {
+                    f.suppression.reason.value
+                    for f in suppressed_findings
+                    if f.suppression is not None
+                }
+            )
+            waived = f"{len(suppressed_findings)} suppressed finding(s) excluded"
+            if reasons:
+                waived = f"{waived} ({', '.join(reasons)})"
+            note = f"{note}; {waived}" if note else waived
 
         technologies = sorted({t for d in mapped for t in d.technologies})
         items.append(
